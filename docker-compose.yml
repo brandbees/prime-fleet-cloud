@@ -1,0 +1,57 @@
+# Prime Fleet Cloud — local / VPS stack
+# Panel (Next) + Postgres + OpenWA
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: primefleet
+      POSTGRES_PASSWORD: primefleet
+      POSTGRES_DB: primefleet_cloud
+    ports:
+      - "5433:5432"
+    volumes:
+      - pf_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U primefleet -d primefleet_cloud"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  openwa:
+    image: rmyndharis/openwa:latest
+    restart: unless-stopped
+    stop_grace_period: 75s
+    environment:
+      AUTO_START_SESSIONS: "true"
+    ports:
+      - "127.0.0.1:2785:2785"
+    volumes:
+      - pf_openwa:/app/data
+
+  panel:
+    profiles: ["full"]
+    build:
+      context: ./app
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3040:3000"
+    environment:
+      DATABASE_URL: postgresql://primefleet:primefleet@db:5432/primefleet_cloud
+      AUTH_SECRET: change-me-local-auth-secret-32chars
+      OPENWA_BASE_URL: http://openwa:2785
+      OPENWA_API_KEY: ${OPENWA_API_KEY:-}
+      OPENWA_SESSION_ID: ${OPENWA_SESSION_ID:-}
+      PANEL_PUBLIC_URL: http://localhost:3040
+      SEED_ADMIN_EMAIL: admin@primefleet.local
+      SEED_ADMIN_PASSWORD: admin12345
+    depends_on:
+      db:
+        condition: service_healthy
+      openwa:
+        condition: service_started
+
+volumes:
+  pf_pg:
+  pf_openwa:
