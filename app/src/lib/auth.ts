@@ -31,10 +31,14 @@ export async function createSession(userId: string, email: string) {
     .setExpirationTime("14d")
     .sign(secret());
   const jar = await cookies();
+  const publicUrl = env("PANEL_PUBLIC_URL", "");
+  const secureCookie =
+    process.env.COOKIE_SECURE === "true" || publicUrl.startsWith("https://");
   jar.set(COOKIE, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    /* HTTP VPS (http://IP:3040) must not use Secure cookies or login never sticks */
+    secure: secureCookie,
     path: "/",
     maxAge: 60 * 60 * 24 * 14,
   });
