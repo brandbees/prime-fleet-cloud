@@ -39,13 +39,13 @@ services:
       - "3040:3000"
     environment:
       DATABASE_URL: postgresql://primefleet:primefleet@db:5432/primefleet_cloud
-      AUTH_SECRET: change-me-local-auth-secret-32chars
+      AUTH_SECRET: ${AUTH_SECRET:-change-me-local-auth-secret-32chars}
       OPENWA_BASE_URL: http://openwa:2785
       OPENWA_API_KEY: ${OPENWA_API_KEY:-}
       OPENWA_SESSION_ID: ${OPENWA_SESSION_ID:-}
-      PANEL_PUBLIC_URL: http://localhost:3040
-      SEED_ADMIN_EMAIL: admin@primefleet.local
-      SEED_ADMIN_PASSWORD: admin12345
+      PANEL_PUBLIC_URL: ${PANEL_PUBLIC_URL:-http://localhost:3040}
+      SEED_ADMIN_EMAIL: ${SEED_ADMIN_EMAIL:-admin@primefleet.local}
+      SEED_ADMIN_PASSWORD: ${SEED_ADMIN_PASSWORD:-admin12345}
     depends_on:
       db:
         condition: service_healthy
