@@ -35,7 +35,7 @@ export async function POST(req: Request) {
       String(meta.license_id || session.client_reference_id || "").trim();
     const licenseKey = String(meta.license_key || "").trim();
 
-    let license =
+    const license =
       (licenseId && (await prisma.license.findUnique({ where: { id: licenseId } }))) ||
       (licenseKey && (await prisma.license.findUnique({ where: { key: licenseKey } }))) ||
       null;
