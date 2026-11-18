@@ -130,6 +130,29 @@ export async function startSession(sessionId: string) {
   return { http: res.status, ok: res.ok || res.status === 409 };
 }
 
+/** Best-effort logout then delete so the phone can scan a new QR. */
+export async function disconnectSession(sessionId: string) {
+  const { baseUrl, apiKey } = openwaConfig();
+  if (!apiKey) throw new Error("OPENWA_API_KEY missing");
+  if (!sessionId) return { ok: true as const, http: 204, message: "No session" };
+
+  const logout = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/logout`, {
+    method: "POST",
+    headers: headers(apiKey),
+  });
+  const del = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, {
+    method: "DELETE",
+    headers: headers(apiKey),
+  });
+  // 404 = already gone; 400 after logout can still mean session torn down.
+  const ok = del.ok || del.status === 404 || logout.ok || logout.status === 404;
+  return {
+    ok,
+    http: del.status || logout.status,
+    message: ok ? "Session disconnected" : `OpenWA logout/delete failed (${logout.status}/${del.status})`,
+  };
+}
+
 export async function getQr(sessionId: string) {
   const { baseUrl, apiKey } = openwaConfig();
   if (!apiKey) throw new Error("OPENWA_API_KEY missing");
