@@ -8,24 +8,25 @@ function hashLicenseKey(key: string) {
   return createHash("sha256").update(String(key || "").trim().toUpperCase(), "utf8").digest("hex");
 }
 
+function assertStrongProdPassword(password: string) {
+  if (process.env.NODE_ENV !== "production") return;
+  if (!process.env.SEED_ADMIN_PASSWORD || password === "admin12345" || password.length < 12) {
+    throw new Error(
+      "Refuse to set weak admin password in production. Set SEED_ADMIN_PASSWORD (12+ chars)."
+    );
+  }
+}
+
 async function main() {
   const email = process.env.SEED_ADMIN_EMAIL || "admin@primefleet.local";
   const password = process.env.SEED_ADMIN_PASSWORD || "admin12345";
-  const isProd = process.env.NODE_ENV === "production";
-
-  if (isProd) {
-    if (!process.env.SEED_ADMIN_PASSWORD || password === "admin12345" || password.length < 12) {
-      throw new Error(
-        "Refuse to seed weak admin password in production. Set SEED_ADMIN_PASSWORD (12+ chars)."
-      );
-    }
-  }
-
-  const hash = await bcrypt.hash(password, 12);
   const existing = await prisma.adminUser.findUnique({ where: { email } });
+  const wantReset = process.env.SEED_RESET_ADMIN_PASSWORD === "1";
 
   if (existing) {
-    if (process.env.SEED_RESET_ADMIN_PASSWORD === "1") {
+    if (wantReset) {
+      assertStrongProdPassword(password);
+      const hash = await bcrypt.hash(password, 12);
       await prisma.adminUser.update({
         where: { email },
         data: { passwordHash: hash },
@@ -35,6 +36,8 @@ async function main() {
       console.log(`Admin ${email} exists — password unchanged (SEED_RESET_ADMIN_PASSWORD=1 to overwrite)`);
     }
   } else {
+    assertStrongProdPassword(password);
+    const hash = await bcrypt.hash(password, 12);
     await prisma.adminUser.create({
       data: { email, passwordHash: hash, name: "Prime Fleet Admin" },
     });
