@@ -2,7 +2,16 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { sendText } from "@/lib/openwa";
 import { canUsePremium } from "@/lib/license-status";
-import { allowRate } from "@/lib/rate-limit";
+import { findLicenseByKey } from "@/lib/licenses";
+import {
+  assertSiteBound,
+  clientIp,
+  normalizeE164,
+  normalizeSiteUrl,
+  rateLimited,
+  waDailyQuota,
+  waTextMaxChars,
+} from "@/lib/security";
 
 /** Plugin premium WhatsApp send — license key in header or body. */
 export async function POST(req: Request) {
@@ -10,34 +19,59 @@ export async function POST(req: Request) {
     license_key?: string;
     to?: string;
     text?: string;
+    site_url?: string;
   };
   const headerKey = req.headers.get("x-prime-fleet-license") || "";
   const key = String(body.license_key || headerKey || "").trim();
-  const to = String(body.to || "").trim();
+  const toRaw = String(body.to || "").trim();
   const text = String(body.text || "").trim();
+  const siteUrl = normalizeSiteUrl(String(body.site_url || "").trim());
+  const ip = clientIp(req);
 
   if (!key) return NextResponse.json({ error: "Missing license_key" }, { status: 400 });
-  if (!to || !text) return NextResponse.json({ error: "to and text required" }, { status: 400 });
 
-  /* Cap burst sends per license + destination (test spam / runaway jobs). */
-  const byLic = allowRate(`wa:lic:${key}`, 40, 60_000);
-  if (!byLic.ok) {
+  const byLic = rateLimited(`wa:lic:${key.slice(0, 24)}`, 40, 60_000);
+  if (byLic) {
     return NextResponse.json(
       { error: "Rate limit — too many WhatsApp sends for this license. Retry shortly." },
-      { status: 429, headers: { "Retry-After": String(byLic.retryAfterSec) } }
+      { status: 429, headers: byLic.headers }
     );
   }
-  const byTo = allowRate(`wa:to:${key}:${to}`, 8, 60_000);
-  if (!byTo.ok) {
+  const byIp = rateLimited(`wa:ip:${ip}`, 80, 60_000);
+  if (byIp) return byIp;
+
+  const to = normalizeE164(toRaw);
+  if (!to) {
     return NextResponse.json(
-      { error: "Rate limit — too many messages to this number. Retry shortly." },
-      { status: 429, headers: { "Retry-After": String(byTo.retryAfterSec) } }
+      { error: "Invalid destination. Use international format (E.164), e.g. +14155552671." },
+      { status: 400 }
+    );
+  }
+  const maxChars = waTextMaxChars();
+  if (!text) return NextResponse.json({ error: "to and text required" }, { status: 400 });
+  if (text.length > maxChars) {
+    return NextResponse.json(
+      { error: `Message too long (max ${maxChars} characters).` },
+      { status: 400 }
     );
   }
 
-  const license = await prisma.license.findUnique({ where: { key } });
+  const byTo = rateLimited(`wa:to:${key.slice(0, 24)}:${to}`, 8, 60_000);
+  if (byTo) {
+    return NextResponse.json(
+      { error: "Rate limit — too many messages to this number. Retry shortly." },
+      { status: 429, headers: byTo.headers }
+    );
+  }
+
+  const license = await findLicenseByKey(key);
   if (!license) {
     return NextResponse.json({ error: "Invalid or inactive license" }, { status: 403 });
+  }
+
+  const siteCheck = assertSiteBound(license, siteUrl);
+  if (!siteCheck.ok) {
+    return NextResponse.json({ error: siteCheck.error }, { status: 403 });
   }
 
   const gate = canUsePremium(license);
@@ -49,6 +83,23 @@ export async function POST(req: Request) {
           ? "License expired — WhatsApp blocked."
           : "Invalid or inactive license";
     return NextResponse.json({ error: msg, reason: gate.reason }, { status: 403 });
+  }
+
+  const dayStart = new Date();
+  dayStart.setUTCHours(0, 0, 0, 0);
+  const sentToday = await prisma.messageLog.count({
+    where: {
+      licenseId: license.id,
+      createdAt: { gte: dayStart },
+      status: { not: "failed" },
+    },
+  });
+  const quota = waDailyQuota();
+  if (sentToday >= quota) {
+    return NextResponse.json(
+      { error: `Daily WhatsApp quota reached (${quota}). Try again tomorrow.` },
+      { status: 429 }
+    );
   }
 
   try {

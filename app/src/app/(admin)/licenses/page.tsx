@@ -13,25 +13,46 @@ type License = {
   active: boolean;
   notes: string;
   createdAt: string;
+  waEntitlement?: string;
+  waExpiresAt?: string | null;
+  serverStatus?: string;
+  serverIp?: string;
   usable?: boolean;
+  pluginOk?: boolean;
+  waOk?: boolean;
   gateReason?: string;
   daysLeft?: number | null;
 };
 
-function planBadge(r: License) {
-  if (!r.active) return <span className="badge off">off</span>;
+function pluginBadge(r: License) {
+  if (!r.active || r.pluginOk === false) return <span className="badge off">plugin off</span>;
+  return <span className="badge ok">plugin on</span>;
+}
+
+function waBadge(r: License) {
+  const ent = (r.waEntitlement || r.plan || "none").toLowerCase();
+  if (ent === "none") return <span className="badge off">WA none</span>;
   if (r.gateReason === "trial_expired" || r.gateReason === "expired") {
-    return <span className="badge off">{r.plan === "trial" ? "trial expired" : "expired"}</span>;
+    return <span className="badge off">{ent === "trial" ? "WA trial expired" : "WA expired"}</span>;
   }
-  if (r.plan === "trial") {
+  if (ent === "trial") {
     const left = typeof r.daysLeft === "number" ? r.daysLeft : null;
     return (
       <span className="badge warn">
-        trial{left !== null ? ` · ${left}d left` : ""}
+        WA trial{left !== null ? ` · ${left}d` : ""}
       </span>
     );
   }
-  return <span className="badge ok">paid</span>;
+  return <span className="badge ok">WA {ent === "paid" ? "paid" : ent}</span>;
+}
+
+function serverBadge(r: License) {
+  const s = (r.serverStatus || "none").toLowerCase();
+  if (s === "running") return <span className="badge ok">server running</span>;
+  if (s === "provisioning") return <span className="badge warn">provisioning</span>;
+  if (s === "error") return <span className="badge off">server error</span>;
+  if (s === "stopped") return <span className="badge off">server off</span>;
+  return <span className="badge off">server none</span>;
 }
 
 /** Checkout/system writes into notes — hide those under the label. */
@@ -90,26 +111,33 @@ export default function LicensesPage() {
 
   async function create(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    const form = e.currentTarget;
     setBusy(true);
-    const fd = new FormData(e.currentTarget);
-    const res = await fetch("/api/licenses", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        label: fd.get("label"),
-        siteUrl: fd.get("siteUrl"),
-        notes: fd.get("notes"),
-        plan: fd.get("plan") === "trial" ? "trial" : "paid",
-      }),
-    });
-    setBusy(false);
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      setError(data.error || "Create failed");
-      return;
+    setError("");
+    const fd = new FormData(form);
+    try {
+      const res = await fetch("/api/licenses", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: fd.get("label"),
+          siteUrl: fd.get("siteUrl"),
+          notes: fd.get("notes"),
+          waPlan: fd.get("waPlan") || "trial",
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Create failed");
+        return;
+      }
+      form.reset();
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Create failed");
+    } finally {
+      setBusy(false);
     }
-    e.currentTarget.reset();
-    await load();
   }
 
   async function patch(id: string, body: Record<string, unknown>) {
@@ -127,13 +155,28 @@ export default function LicensesPage() {
     await load();
   }
 
+  async function instanceAct(licenseId: string, action: string) {
+    setBusy(true);
+    try {
+      await fetch(`/api/instances/${licenseId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      await load();
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="stack">
       <div className="page-head">
         <div className="page-head__copy">
           <h1>Licenses</h1>
           <p className="muted">
-            Issue a 14-day trial or paid key. After trial ends, WhatsApp stays off until converted to paid.
+            Plugin unlock ($49) is always on the key. Hosted WhatsApp is a separate entitlement (trial / paid).
+            Server uses <strong>mock provision</strong> while Webdock is on hold — see Instances.
           </p>
         </div>
         <div className="page-head__actions">{busy || loading ? <Loader /> : null}</div>
@@ -151,10 +194,10 @@ export default function LicensesPage() {
             <input id="siteUrl" name="siteUrl" placeholder="https://example.com" />
           </div>
           <div className="field">
-            <label htmlFor="plan">Plan</label>
+            <label htmlFor="waPlan">WhatsApp entitlement</label>
             <select
-              id="plan"
-              name="plan"
+              id="waPlan"
+              name="waPlan"
               defaultValue="trial"
               style={{
                 height: 40,
@@ -164,8 +207,9 @@ export default function LicensesPage() {
                 background: "#fff",
               }}
             >
-              <option value="trial">14-day free trial</option>
-              <option value="paid">Paid (no expiry)</option>
+              <option value="none">Plugin only (no WA)</option>
+              <option value="trial">14-day WA trial</option>
+              <option value="paid">WA paid (no expiry)</option>
             </select>
           </div>
           <div className="field">
@@ -192,7 +236,9 @@ export default function LicensesPage() {
                   <th>Label</th>
                   <th>License key</th>
                   <th>Site</th>
-                  <th>Plan</th>
+                  <th>Plugin</th>
+                  <th>WhatsApp</th>
+                  <th>Server</th>
                   <th>Actions</th>
                 </tr>
               </thead>
@@ -206,10 +252,12 @@ export default function LicensesPage() {
                           {humanNotes(r.notes)}
                         </div>
                       ) : null}
-                      {r.expiresAt ? (
-                        <div className="muted">Expires {new Date(r.expiresAt).toLocaleDateString()}</div>
+                      {r.waExpiresAt || r.expiresAt ? (
+                        <div className="muted">
+                          WA expires {new Date(String(r.waExpiresAt || r.expiresAt)).toLocaleDateString()}
+                        </div>
                       ) : (
-                        <div className="muted">No expiry</div>
+                        <div className="muted">No WA expiry</div>
                       )}
                     </td>
                     <td>
@@ -223,20 +271,50 @@ export default function LicensesPage() {
                     <td className="muted cell-clamp" title={r.siteUrl || undefined}>
                       {r.siteUrl || "—"}
                     </td>
-                    <td className="plan-cell">{planBadge(r)}</td>
+                    <td className="plan-cell">{pluginBadge(r)}</td>
+                    <td className="plan-cell">{waBadge(r)}</td>
+                    <td className="plan-cell">
+                      {serverBadge(r)}
+                      {r.serverIp ? <div className="muted">{r.serverIp}</div> : null}
+                    </td>
                     <td>
                       <div className="actions">
-                        {r.plan === "trial" || r.gateReason === "trial_expired" ? (
+                        {(r.waEntitlement === "trial" ||
+                          r.plan === "trial" ||
+                          r.gateReason === "trial_expired") && (
                           <button
                             type="button"
                             className="btn btn-primary"
-                            onClick={() => patch(r.id, { plan: "paid" })}
+                            onClick={() => patch(r.id, { waPlan: "paid" })}
                           >
-                            Convert to paid
+                            Convert WA to paid
+                          </button>
+                        )}
+                        {(r.waEntitlement === "none" || r.plan === "none") && (
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={() => patch(r.id, { waPlan: "trial" })}
+                          >
+                            Add WA trial
+                          </button>
+                        )}
+                        {(r.serverStatus === "none" ||
+                          r.serverStatus === "stopped" ||
+                          r.serverStatus === "error") &&
+                          r.waOk !== false &&
+                          (r.waEntitlement || r.plan) !== "none" && (
+                            <button type="button" className="btn" onClick={() => instanceAct(r.id, "retry")}>
+                              Provision server
+                            </button>
+                          )}
+                        {r.serverStatus === "running" || r.serverStatus === "provisioning" ? (
+                          <button type="button" className="btn" onClick={() => instanceAct(r.id, "power_off")}>
+                            Power off
                           </button>
                         ) : null}
                         <button type="button" className="btn" onClick={() => patch(r.id, { active: !r.active })}>
-                          {r.active ? "Disable" : "Enable"}
+                          {r.active ? "Revoke plugin" : "Enable plugin"}
                         </button>
                         <button type="button" className="btn btn-danger" onClick={() => remove(r.id)}>
                           Delete
@@ -247,7 +325,7 @@ export default function LicensesPage() {
                 ))}
                 {!rows.length ? (
                   <tr>
-                    <td colSpan={5} className="muted">
+                    <td colSpan={7} className="muted">
                       No licenses yet.
                     </td>
                   </tr>

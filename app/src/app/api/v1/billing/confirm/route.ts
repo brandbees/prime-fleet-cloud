@@ -2,16 +2,24 @@ import { NextResponse } from "next/server";
 import { activatePaid } from "@/lib/billing";
 import { prisma } from "@/lib/prisma";
 import { stripeSettings } from "@/lib/settings";
+import { findLicenseByKey } from "@/lib/licenses";
+import { clientIp, rateLimited } from "@/lib/security";
 
 /**
- * After Stripe Checkout — activate from session_id (backup when webhook/CLI missed).
- * Body/query: { session_id }
+ * After Stripe Checkout — activate from session_id (backup when webhook missed).
+ * Only activates when Stripe reports payment_status=paid. Idempotent.
  */
 export async function POST(req: Request) {
+  const limited = rateLimited(`billing:confirm:${clientIp(req)}`, 20, 60_000);
+  if (limited) return limited;
+
   const body = (await req.json().catch(() => ({}))) as { session_id?: string };
   const url = new URL(req.url);
   const sessionId = String(body.session_id || url.searchParams.get("session_id") || "").trim();
   if (!sessionId) return NextResponse.json({ error: "session_id required" }, { status: 400 });
+  if (!/^cs_[a-zA-Z0-9_]+$/.test(sessionId)) {
+    return NextResponse.json({ error: "Invalid session_id" }, { status: 400 });
+  }
 
   const stripe = await stripeSettings();
   if (!stripe.secretKey) {
@@ -34,7 +42,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: session.error?.message || "Could not load Stripe session" }, { status: 502 });
   }
 
-  if (session.payment_status !== "paid" && session.status !== "complete") {
+  if (session.payment_status !== "paid") {
     return NextResponse.json(
       { error: "Payment not completed yet", payment_status: session.payment_status, status: session.status },
       { status: 402 }
@@ -45,13 +53,18 @@ export async function POST(req: Request) {
   const licenseKey = String(session.metadata?.license_key || "").trim();
   const license =
     (licenseId && (await prisma.license.findUnique({ where: { id: licenseId } }))) ||
-    (licenseKey && (await prisma.license.findUnique({ where: { key: licenseKey } }))) ||
+    (licenseKey && (await findLicenseByKey(licenseKey))) ||
     null;
 
   if (!license) {
     return NextResponse.json({ error: "License not found for this payment" }, { status: 404 });
   }
 
-  await activatePaid(license.id, "Paid via Stripe checkout");
+  try {
+    await activatePaid(license.id, "Paid via Stripe checkout", { sessionId });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Activation failed";
+    return NextResponse.json({ error: msg }, { status: 403 });
+  }
   return NextResponse.json({ ok: true, plan: "paid", license_key: license.key });
 }

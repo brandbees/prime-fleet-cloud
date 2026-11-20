@@ -3,21 +3,16 @@ import { cookies } from "next/headers";
 import bcrypt from "bcryptjs";
 import { prisma } from "./prisma";
 import { env } from "./env";
+import { getAuthSecretBytes } from "./security";
 
 const COOKIE = "pf_cloud_session";
 
-const DEV_AUTH_FALLBACK = "dev-secret-change-me-please-32";
-
 function secret() {
-  const raw = env("AUTH_SECRET", DEV_AUTH_FALLBACK);
-  if (process.env.NODE_ENV === "production" && (!raw || raw === DEV_AUTH_FALLBACK)) {
-    throw new Error("AUTH_SECRET must be set to a strong value in production");
-  }
-  return new TextEncoder().encode(raw);
+  return getAuthSecretBytes();
 }
 
 export async function hashPassword(password: string) {
-  return bcrypt.hash(password, 10);
+  return bcrypt.hash(password, 12);
 }
 
 export async function verifyPassword(password: string, hash: string) {

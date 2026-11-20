@@ -8,7 +8,18 @@ type Phase = "loading" | "ok" | "error";
 function PaySuccessInner() {
   const sp = useSearchParams();
   const sessionId = sp.get("session_id") || "";
-  const returnTo = sp.get("return_to") || "";
+  const returnToRaw = sp.get("return_to") || "";
+  const returnTo = (() => {
+    try {
+      if (!returnToRaw) return "";
+      const u = new URL(returnToRaw);
+      if (u.protocol !== "http:" && u.protocol !== "https:") return "";
+      if (u.username || u.password) return "";
+      return returnToRaw;
+    } catch {
+      return "";
+    }
+  })();
   const [phase, setPhase] = useState<Phase>("loading");
   const [msg, setMsg] = useState("Confirming your payment…");
   const [countdown, setCountdown] = useState(3);

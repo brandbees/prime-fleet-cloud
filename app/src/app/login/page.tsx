@@ -39,11 +39,11 @@ export default function LoginPage() {
         <form onSubmit={onSubmit} style={{ marginTop: 18 }}>
           <div className="field">
             <label htmlFor="email">Email</label>
-            <input id="email" name="email" type="email" required defaultValue="admin@primefleet.local" />
+            <input id="email" name="email" type="email" required autoComplete="username" />
           </div>
           <div className="field">
             <label htmlFor="password">Password</label>
-            <input id="password" name="password" type="password" required defaultValue="admin12345" />
+            <input id="password" name="password" type="password" required autoComplete="current-password" />
           </div>
           {error ? <p style={{ color: "var(--danger)" }}>{error}</p> : null}
           <button className="btn btn-primary" type="submit" disabled={busy}>

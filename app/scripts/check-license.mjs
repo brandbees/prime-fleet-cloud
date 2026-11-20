@@ -1,6 +1,27 @@
 import { PrismaClient } from "@prisma/client";
-const p = new PrismaClient();
-const key = process.argv[2] || "PF-C5A7BAB0-C124D087-E6F13FA1";
-const r = await p.license.findUnique({ where: { key } });
-console.log(JSON.stringify(r && { plan: r.plan, expiresAt: r.expiresAt, notes: r.notes, active: r.active, openwaSessionId: r.openwaSessionId }, null, 2));
-await p.$disconnect();
+
+const prisma = new PrismaClient();
+const rows = await prisma.license.findMany({
+  select: {
+    key: true,
+    label: true,
+    active: true,
+    plan: true,
+    waEntitlement: true,
+    siteUrl: true,
+  },
+});
+console.log(JSON.stringify(rows, null, 2));
+
+const key = process.argv[2] || "PF-4EA00705-5CFFA3F5-7042CBDA";
+const res = await fetch("http://127.0.0.1:3000/api/v1/validate", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    license_key: key,
+    site_url: "http://prime-fleet-fresh.test/",
+  }),
+});
+console.log("validate status", res.status);
+console.log(await res.text());
+await prisma.$disconnect();

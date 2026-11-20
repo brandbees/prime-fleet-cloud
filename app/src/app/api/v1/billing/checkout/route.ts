@@ -1,25 +1,42 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import { canUsePremium } from "@/lib/license-status";
+import { canUseWhatsApp, normalizeWaEntitlement } from "@/lib/license-status";
 import { createCheckoutForLicense } from "@/lib/billing";
+import { findLicenseByKey } from "@/lib/licenses";
+import {
+  assertSiteBound,
+  clientIp,
+  normalizeSiteUrl,
+  rateLimited,
+} from "@/lib/security";
 
 /**
  * Plugin asks for a pay URL when trial/license is expired.
- * Body: { license_key, return_url? }
+ * Body: { license_key, return_url?, site_url? }
  */
 export async function POST(req: Request) {
+  const limited = rateLimited(`billing:checkout:${clientIp(req)}`, 20, 60_000);
+  if (limited) return limited;
+
   const body = (await req.json().catch(() => ({}))) as {
     license_key?: string;
     return_url?: string;
+    site_url?: string;
   };
   const key = String(body.license_key || req.headers.get("x-prime-fleet-license") || "").trim();
   if (!key) return NextResponse.json({ error: "Missing license_key" }, { status: 400 });
 
-  const license = await prisma.license.findUnique({ where: { key } });
+  const license = await findLicenseByKey(key);
   if (!license) return NextResponse.json({ error: "Invalid license" }, { status: 403 });
 
-  const gate = canUsePremium(license);
-  if (gate.ok && license.plan === "paid") {
+  const siteUrl = normalizeSiteUrl(String(body.site_url || "").trim());
+  const siteCheck = assertSiteBound(license, siteUrl);
+  if (!siteCheck.ok) {
+    return NextResponse.json({ error: siteCheck.error }, { status: 403 });
+  }
+
+  const gate = canUseWhatsApp(license);
+  const ent = normalizeWaEntitlement(license);
+  if (gate.ok && (ent === "paid" || ent === "monthly" || ent === "yearly")) {
     return NextResponse.json({
       already_paid: true,
       plan: "paid",
@@ -27,9 +44,11 @@ export async function POST(req: Request) {
     });
   }
 
-  // Allow checkout when expired OR still on trial (early upgrade).
   try {
-    const checkout = await createCheckoutForLicense(key, String(body.return_url || "").trim());
+    const checkout = await createCheckoutForLicense(
+      key,
+      String(body.return_url || "").trim()
+    );
     return NextResponse.json({
       already_paid: false,
       needs_payment: !gate.ok,

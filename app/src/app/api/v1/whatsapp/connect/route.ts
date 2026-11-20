@@ -3,13 +3,23 @@ import { prisma } from "@/lib/prisma";
 import { canUsePremium } from "@/lib/license-status";
 import { ensureSession, getQr, sessionById, startSession } from "@/lib/openwa";
 import { openwaConfig } from "@/lib/env";
+import { findLicenseByKey } from "@/lib/licenses";
+import {
+  assertSiteBound,
+  clientIp,
+  normalizeSiteUrl,
+  rateLimited,
+} from "@/lib/security";
 
 /**
  * Plugin QR connect — no OpenWA credentials on the WordPress side.
- * Body: { license_key }
+ * Body: { license_key, site_url? }
  */
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { license_key?: string };
+  const limited = rateLimited(`wa:connect:${clientIp(req)}`, 20, 60_000);
+  if (limited) return limited;
+
+  const body = (await req.json().catch(() => ({}))) as { license_key?: string; site_url?: string };
   const key = String(body.license_key || req.headers.get("x-prime-fleet-license") || "").trim();
   if (!key) return NextResponse.json({ error: "Missing license_key" }, { status: 400 });
 
@@ -18,8 +28,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Messaging gateway is not configured on the server." }, { status: 503 });
   }
 
-  const license = await prisma.license.findUnique({ where: { key } });
+  const license = await findLicenseByKey(key);
   if (!license) return NextResponse.json({ error: "Invalid license" }, { status: 403 });
+
+  const siteUrl = normalizeSiteUrl(String(body.site_url || "").trim());
+  const siteCheck = assertSiteBound(license, siteUrl);
+  if (!siteCheck.ok) {
+    return NextResponse.json({ error: siteCheck.error }, { status: 403 });
+  }
+
   const gate = canUsePremium(license);
   if (!gate.ok) {
     return NextResponse.json(
@@ -33,6 +50,9 @@ export async function POST(req: Request) {
       { status: 403 }
     );
   }
+
+  const licLimit = rateLimited(`wa:connect:lic:${license.id}`, 12, 60_000);
+  if (licLimit) return licLimit;
 
   try {
     const sessionName = `pf-${license.id.slice(0, 8)}`;
@@ -87,7 +107,6 @@ export async function POST(req: Request) {
 }
 
 async function fetchSessionStatus(sessionId: string) {
-  // Prefer dedicated helper if session id matches env; otherwise query by id.
   const { baseUrl, apiKey } = openwaConfig();
   if (!apiKey) return "unknown";
   const res = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}`, {

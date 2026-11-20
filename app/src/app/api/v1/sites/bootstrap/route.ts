@@ -1,38 +1,52 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { generateLicenseKey } from "@/lib/licenses";
-import { trialExpiryFromNow } from "@/lib/license-status";
-import { allowRate } from "@/lib/rate-limit";
+import { newLicenseKeyFields } from "@/lib/licenses";
+import { trialExpiryFromNow, waWriteFields } from "@/lib/license-status";
+import {
+  assertSiteBound,
+  clientIp,
+  normalizeSiteUrl,
+  publicBootstrapAllowed,
+  rateLimited,
+} from "@/lib/security";
 
 /**
  * First-time site registration. Creates a trial license.
- * Never re-leaks an existing key unless the caller already proves they have it
- * (X-Prime-Fleet-License / body.license_key match) — otherwise attackers who
- * only know site_url could steal WhatsApp send authority.
+ * Disabled in production unless ALLOW_PUBLIC_BOOTSTRAP=1.
+ * Never re-leaks an existing key unless the caller already proves they have it.
  */
 export async function POST(req: Request) {
+  if (!publicBootstrapAllowed()) {
+    return NextResponse.json(
+      {
+        error:
+          "Self-serve trial bootstrap is disabled. Activate with your Envato purchase code or ask support for a key.",
+      },
+      { status: 403 }
+    );
+  }
+
   const body = (await req.json().catch(() => ({}))) as {
     site_url?: string;
     site_name?: string;
     license_key?: string;
   };
-  const siteUrl = String(body.site_url || "").trim().replace(/\/$/, "");
+  const siteUrl = normalizeSiteUrl(String(body.site_url || "").trim());
   const siteName = String(body.site_name || "").trim() || "WordPress site";
   const presented = String(
     body.license_key || req.headers.get("x-prime-fleet-license") || ""
   ).trim();
+  const ip = clientIp(req);
 
   if (!siteUrl) {
     return NextResponse.json({ error: "site_url required" }, { status: 400 });
   }
 
-  const rl = allowRate(`bootstrap:${siteUrl}`, 8, 60_000);
-  if (!rl.ok) {
-    return NextResponse.json(
-      { error: "Too many bootstrap attempts. Retry shortly." },
-      { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
-    );
-  }
+  const limited =
+    rateLimited(`bootstrap:site:${siteUrl}`, 5, 60_000) ||
+    rateLimited(`bootstrap:ip:${ip}`, 10, 60_000) ||
+    rateLimited(`bootstrap:global`, 60, 60_000);
+  if (limited) return limited;
 
   const existing = await prisma.license.findFirst({
     where: { siteUrl },
@@ -40,6 +54,10 @@ export async function POST(req: Request) {
   });
 
   if (existing) {
+    const bound = assertSiteBound(existing, siteUrl);
+    if (!bound.ok) {
+      return NextResponse.json({ error: bound.error }, { status: 403 });
+    }
     if (presented && presented === existing.key) {
       return NextResponse.json({
         license_key: existing.key,
@@ -61,14 +79,16 @@ export async function POST(req: Request) {
     );
   }
 
+  const trialExp = trialExpiryFromNow(14);
   const license = await prisma.license.create({
     data: {
-      key: generateLicenseKey(),
+      ...newLicenseKeyFields(),
       label: siteName,
       siteUrl,
-      plan: "trial",
-      expiresAt: trialExpiryFromNow(14),
+      ...waWriteFields("trial", trialExp),
       active: true,
+      serverStatus: "none",
+      serverIp: "",
       notes: "auto-bootstrap",
     },
   });
@@ -76,7 +96,9 @@ export async function POST(req: Request) {
   return NextResponse.json({
     license_key: license.key,
     plan: license.plan,
-    expires_at: license.expiresAt,
+    wa_entitlement: license.waEntitlement,
+    expires_at: license.waExpiresAt || license.expiresAt,
+    server_status: license.serverStatus,
     label: license.label,
     existing: false,
   });

@@ -8,6 +8,7 @@ import { PanelLoader } from "@/components/Loader";
 const links = [
   { href: "/dashboard", label: "Dashboard", icon: "grid" },
   { href: "/licenses", label: "Licenses", icon: "key" },
+  { href: "/instances", label: "Instances", icon: "server" },
   { href: "/whatsapp", label: "WhatsApp", icon: "wa" },
   { href: "/billing", label: "Billing", icon: "card" },
   { href: "/logs", label: "Send logs", icon: "list" },
@@ -61,6 +62,16 @@ function Icon({ name }: { name: string }) {
       <svg {...common}>
         <rect x="3" y="6" width="18" height="12" rx="2" />
         <path d="M3 10h18" />
+      </svg>
+    );
+  }
+  if (name === "server") {
+    return (
+      <svg {...common}>
+        <rect x="3" y="4" width="18" height="6" rx="1.5" />
+        <rect x="3" y="14" width="18" height="6" rx="1.5" />
+        <circle cx="7" cy="7" r="1" fill="currentColor" stroke="none" />
+        <circle cx="7" cy="17" r="1" fill="currentColor" stroke="none" />
       </svg>
     );
   }

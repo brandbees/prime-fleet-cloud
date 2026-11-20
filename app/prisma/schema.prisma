@@ -25,20 +25,82 @@ model AppSetting {
 
 model License {
   id              String    @id @default(cuid())
+  /// Plaintext key (issued to customer). Prefer lookups via keyHash.
   key             String    @unique
+  /// SHA-256 (uppercase key) — indexed lookup + DB-dump hardening aid.
+  keyHash         String    @default("")
   label           String
   siteUrl         String    @default("")
-  /// trial | paid
+  /// Legacy WA-facing mirror: none | trial | paid (kept in sync with waEntitlement for old clients).
   plan            String    @default("paid")
-  /// null = no expiry (paid). Trial sets +14 days.
+  /// null = no expiry (paid). Trial sets +14 days. Legacy mirror of waExpiresAt.
   expiresAt       DateTime?
   /// OpenWA session UUID bound to this site license.
   openwaSessionId String    @default("")
+  /// Plugin product unlock (marketplace $49). Revoke = active false.
   active          Boolean   @default(true)
+  /// Hosted WhatsApp entitlement: none | trial | monthly | yearly | paid
+  waEntitlement   String    @default("none")
+  waExpiresAt     DateTime?
+  /// Denormalized mirror of WaInstance.status for WP polls.
+  /// none | provisioning | running | error | stopped
+  serverStatus    String    @default("none")
+  serverIp        String    @default("")
+  /// Envato (or market) purchase code — one license per code (enforced in app when non-empty).
+  purchaseCode    String    @default("")
+  purchaseSource  String    @default("")
+  /// Last Stripe Checkout session that activated paid WA (idempotency).
+  lastPaidSessionId String  @default("")
   notes           String    @default("")
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
   messages        MessageLog[]
+  waInstance      WaInstance?
+
+  @@index([purchaseCode])
+  @@index([keyHash])
+  @@index([siteUrl])
+}
+
+/// One-time JWT jti store (activate / pay tokens).
+model SecurityToken {
+  jti       String   @id
+  purpose   String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([expiresAt])
+}
+
+/// Stripe session/event idempotency + audit.
+model StripeProcessed {
+  id        String   @id
+  kind      String   @default("session")
+  licenseId String   @default("")
+  createdAt DateTime @default(now())
+}
+
+/// Per-license hosted WhatsApp box (Sprint 3). Webdock HOLD → mock provider until unhold.
+model WaInstance {
+  id            String    @id @default(cuid())
+  licenseId     String    @unique
+  license       License   @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  /// mock | webdock | digitalocean | aws
+  provider      String    @default("mock")
+  /// Provider-side id (mock-… or Webdock slug later).
+  providerId    String    @default("")
+  /// none | provisioning | running | error | stopped
+  status        String    @default("none")
+  ip            String    @default("")
+  openwaBaseUrl String    @default("")
+  lastError     String    @default("")
+  provisionedAt DateTime?
+  poweredOffAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@index([status])
+  @@index([provider])
 }
 
 model MessageLog {
