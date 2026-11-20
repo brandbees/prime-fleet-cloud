@@ -74,7 +74,7 @@ export function normalizeSiteUrl(url: string): string {
     const u = new URL(raw.includes("://") ? raw : `https://${raw}`);
     u.hash = "";
     u.search = "";
-    let href = u.toString().replace(/\/$/, "");
+    const href = u.toString().replace(/\/$/, "");
     return href;
   } catch {
     return raw;
