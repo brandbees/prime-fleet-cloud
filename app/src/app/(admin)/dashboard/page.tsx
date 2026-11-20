@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { prisma } from "@/lib/prisma";
 import { health, sessionStatus } from "@/lib/openwa";
-import { openwaConfig } from "@/lib/env";
+import { openwaSettings } from "@/lib/settings";
 
 export const dynamic = "force-dynamic";
 
@@ -54,7 +54,7 @@ export default async function DashboardPage() {
   }
   const maxBar = Math.max(1, ...series.map((s) => s.sent + s.failed));
 
-  const cfg = openwaConfig();
+  const cfg = await openwaSettings();
   let waLabel = "unknown";
   let waOk = false;
   try {
@@ -150,7 +150,7 @@ export default async function DashboardPage() {
           </div>
           <div>
             <div className="muted">Session</div>
-            <div className="mono">{cfg.sessionId || "Not set in .env"}</div>
+            <div className="mono">{cfg.sessionId || "Per-license sessions (WP QR)"}</div>
           </div>
           <div className="actions">
             <Link className="btn btn-primary" href="/whatsapp">

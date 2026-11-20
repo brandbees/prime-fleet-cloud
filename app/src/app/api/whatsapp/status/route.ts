@@ -1,13 +1,13 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { health, sessionById, sessionStatus } from "@/lib/openwa";
-import { openwaConfig } from "@/lib/env";
+import { openwaSettings } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
 
 export async function GET() {
   const admin = await requireAdmin();
   if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  const cfg = openwaConfig();
+  const cfg = await openwaSettings();
   try {
     const h = await health();
     const envSession = await sessionStatus();
@@ -41,7 +41,8 @@ export async function GET() {
     return NextResponse.json({
       baseUrl: cfg.baseUrl,
       hasApiKey: Boolean(cfg.apiKey),
-      /* Global .env session is optional — product path stores session on each license. */
+      configured: cfg.configured,
+      source: cfg.source,
       sessionId: cfg.sessionId || null,
       health: h,
       session: envSession,
@@ -51,7 +52,7 @@ export async function GET() {
         ready: readyCount,
         note:
           readyCount > 0
-            ? `${readyCount} license phone(s) ready — sessions are per site, not OPENWA_SESSION_ID in .env`
+            ? `${readyCount} license phone(s) ready — sessions are per site`
             : "No ready license sessions yet. Connect phone from WordPress Settings → WhatsApp (QR).",
       },
     });
@@ -60,6 +61,8 @@ export async function GET() {
       {
         baseUrl: cfg.baseUrl,
         hasApiKey: Boolean(cfg.apiKey),
+        configured: cfg.configured,
+        source: cfg.source,
         sessionId: cfg.sessionId || null,
         error: e instanceof Error ? e.message : "OpenWA unreachable",
       },

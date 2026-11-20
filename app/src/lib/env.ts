@@ -3,6 +3,7 @@ export function env(name: string, fallback = "") {
   return v === undefined || v === null || v === "" ? fallback : v;
 }
 
+/** Sync .env-only fallback. Prefer `openwaSettings()` from `@/lib/settings` (panel DB). */
 export function openwaConfig() {
   return {
     baseUrl: env("OPENWA_BASE_URL", "http://127.0.0.1:2785").replace(/\/$/, "").replace(/\/api$/i, ""),

@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { disconnectSession } from "@/lib/openwa";
-import { openwaConfig } from "@/lib/env";
+import { openwaSettings } from "@/lib/settings";
 import { canUsePlugin } from "@/lib/license-status";
 import { findLicenseByKey } from "@/lib/licenses";
 import {
@@ -23,9 +23,12 @@ export async function POST(req: Request) {
   const key = String(body.license_key || req.headers.get("x-prime-fleet-license") || "").trim();
   if (!key) return NextResponse.json({ error: "Missing license_key" }, { status: 400 });
 
-  const cfg = openwaConfig();
+  const cfg = await openwaSettings();
   if (!cfg.apiKey) {
-    return NextResponse.json({ error: "Messaging gateway is not configured on the server." }, { status: 503 });
+    return NextResponse.json(
+      { error: "Messaging gateway is not configured. Set OpenWA in Panel → WhatsApp." },
+      { status: 503 }
+    );
   }
 
   const license = await findLicenseByKey(key);

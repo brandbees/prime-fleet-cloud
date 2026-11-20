@@ -117,7 +117,14 @@ export async function tickMockProvision(licenseId: string) {
   if (age < MOCK_PROVISION_MS) return inst;
 
   const ip = mockIpFor(licenseId);
-  const openwaBaseUrl = process.env.OPENWA_BASE_URL || "http://127.0.0.1:2785";
+  let openwaBaseUrl = process.env.OPENWA_BASE_URL || "http://127.0.0.1:2785";
+  try {
+    const { openwaSettings } = await import("./settings");
+    const s = await openwaSettings();
+    if (s.baseUrl) openwaBaseUrl = s.baseUrl;
+  } catch {
+    /* keep env fallback */
+  }
   const updated = await prisma.waInstance.update({
     where: { id: inst.id },
     data: {

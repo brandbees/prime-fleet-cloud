@@ -42,3 +42,28 @@ export async function stripeSettings() {
     configured: Boolean(secret.trim()),
   };
 }
+
+/** Hosted OpenWA gateway — panel DB first, .env fallback. */
+export async function openwaSettings() {
+  const baseFromDb = (await getSetting("openwa_base_url")).trim();
+  const keyFromDb = (await getSetting("openwa_api_key")).trim();
+  const sessionFromDb = (await getSetting("openwa_session_id")).trim();
+  const baseUrl = (
+    baseFromDb ||
+    env("OPENWA_BASE_URL", "http://127.0.0.1:2785")
+  )
+    .replace(/\/$/, "")
+    .replace(/\/api$/i, "");
+  const apiKey = keyFromDb || env("OPENWA_API_KEY");
+  const sessionId = sessionFromDb || env("OPENWA_SESSION_ID");
+  return {
+    baseUrl,
+    apiKey,
+    sessionId,
+    configured: Boolean(baseUrl && apiKey),
+    source: {
+      baseUrl: baseFromDb ? ("panel" as const) : ("env" as const),
+      apiKey: keyFromDb ? ("panel" as const) : apiKey ? ("env" as const) : ("none" as const),
+    },
+  };
+}

@@ -1,4 +1,4 @@
-import { openwaConfig } from "./env";
+import { openwaSettings } from "./settings";
 
 export type OpenWaSendResult = {
   providerId: string;
@@ -20,8 +20,12 @@ export function toChatId(to: string) {
   return `${digits}@c.us`;
 }
 
+async function cfg() {
+  return openwaSettings();
+}
+
 export async function health() {
-  const { baseUrl, apiKey } = openwaConfig();
+  const { baseUrl, apiKey } = await cfg();
   const res = await fetch(`${baseUrl}/api/health`, {
     headers: headers(apiKey),
     cache: "no-store",
@@ -37,7 +41,7 @@ export async function health() {
 }
 
 export async function sessionById(sessionId: string) {
-  const { baseUrl, apiKey } = openwaConfig();
+  const { baseUrl, apiKey } = await cfg();
   if (!sessionId || !apiKey) {
     return { ok: false, status: "unconfigured", phone: "", http: 0, body: null as unknown };
   }
@@ -61,13 +65,13 @@ export async function sessionById(sessionId: string) {
 }
 
 export async function sessionStatus() {
-  const { sessionId } = openwaConfig();
+  const { sessionId } = await cfg();
   return sessionById(sessionId || "");
 }
 
 export async function ensureSession(name: string, existingId = "") {
-  const { baseUrl, apiKey } = openwaConfig();
-  if (!apiKey) throw new Error("OPENWA_API_KEY missing");
+  const { baseUrl, apiKey } = await cfg();
+  if (!apiKey) throw new Error("OpenWA API key missing — set it in Panel → WhatsApp");
 
   if (existingId) {
     const check = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(existingId)}`, {
@@ -97,7 +101,6 @@ export async function ensureSession(name: string, existingId = "") {
     /* ignore */
   }
   if (res.status === 409) {
-    // Name already exists — find by exact name.
     const list = await fetch(
       `${baseUrl}/api/sessions?name=${encodeURIComponent(safeName || "")}`,
       {
@@ -120,20 +123,19 @@ export async function ensureSession(name: string, existingId = "") {
 }
 
 export async function startSession(sessionId: string) {
-  const { baseUrl, apiKey } = openwaConfig();
-  if (!apiKey) throw new Error("OPENWA_API_KEY missing");
+  const { baseUrl, apiKey } = await cfg();
+  if (!apiKey) throw new Error("OpenWA API key missing — set it in Panel → WhatsApp");
   const res = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/start`, {
     method: "POST",
     headers: headers(apiKey),
   });
-  // 409 etc. can mean already started — continue to QR/status.
   return { http: res.status, ok: res.ok || res.status === 409 };
 }
 
 /** Best-effort logout then delete so the phone can scan a new QR. */
 export async function disconnectSession(sessionId: string) {
-  const { baseUrl, apiKey } = openwaConfig();
-  if (!apiKey) throw new Error("OPENWA_API_KEY missing");
+  const { baseUrl, apiKey } = await cfg();
+  if (!apiKey) throw new Error("OpenWA API key missing — set it in Panel → WhatsApp");
   if (!sessionId) return { ok: true as const, http: 204, message: "No session" };
 
   const logout = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/logout`, {
@@ -144,7 +146,6 @@ export async function disconnectSession(sessionId: string) {
     method: "DELETE",
     headers: headers(apiKey),
   });
-  // 404 = already gone; 400 after logout can still mean session torn down.
   const ok = del.ok || del.status === 404 || logout.ok || logout.status === 404;
   return {
     ok,
@@ -154,8 +155,8 @@ export async function disconnectSession(sessionId: string) {
 }
 
 export async function getQr(sessionId: string) {
-  const { baseUrl, apiKey } = openwaConfig();
-  if (!apiKey) throw new Error("OPENWA_API_KEY missing");
+  const { baseUrl, apiKey } = await cfg();
+  if (!apiKey) throw new Error("OpenWA API key missing — set it in Panel → WhatsApp");
   const res = await fetch(`${baseUrl}/api/sessions/${encodeURIComponent(sessionId)}/qr`, {
     headers: headers(apiKey),
     cache: "no-store",
@@ -168,7 +169,12 @@ export async function getQr(sessionId: string) {
     /* ignore */
   }
   if (!res.ok) {
-    return { ok: false as const, http: res.status, qr: "", message: typeof data.message === "string" ? data.message : raw.slice(0, 200) };
+    return {
+      ok: false as const,
+      http: res.status,
+      qr: "",
+      message: typeof data.message === "string" ? data.message : raw.slice(0, 200),
+    };
   }
   const qr =
     (typeof data.qrCode === "string" && data.qrCode) ||
@@ -180,9 +186,9 @@ export async function getQr(sessionId: string) {
 }
 
 export async function sendText(to: string, text: string, sessionIdOverride = ""): Promise<OpenWaSendResult> {
-  const { baseUrl, apiKey, sessionId: envSession } = openwaConfig();
+  const { baseUrl, apiKey, sessionId: envSession } = await cfg();
   const sessionId = sessionIdOverride || envSession;
-  if (!apiKey) throw new Error("OPENWA_API_KEY missing");
+  if (!apiKey) throw new Error("OpenWA API key missing — set it in Panel → WhatsApp");
   if (!sessionId) throw new Error("No WhatsApp session — connect the phone first.");
   const chatId = toChatId(to);
   const res = await fetch(
