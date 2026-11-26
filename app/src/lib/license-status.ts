@@ -1,7 +1,7 @@
 export type LicenseLike = {
   active: boolean;
   plan: string;
-  expiresAt: Date | string | null;
+  expiresAt?: Date | string | null;
   waEntitlement?: string | null;
   waExpiresAt?: Date | string | null;
   serverStatus?: string | null;
