@@ -1,11 +1,10 @@
 import { NextResponse } from "next/server";
-import type { NextRequest } from "next/server";
 
 /**
  * Baseline security headers (CSP + frame/XSS). Tighten CSP further when panel has a fixed CDN.
  * Admin 2FA: see docs/PANEL_HTTPS.md — TOTP planned; CSP ships now.
  */
-export function middleware(_req: NextRequest) {
+export function middleware() {
   const res = NextResponse.next();
   res.headers.set("X-Frame-Options", "DENY");
   res.headers.set("X-Content-Type-Options", "nosniff");
