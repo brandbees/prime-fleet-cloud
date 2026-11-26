@@ -1,7 +1,13 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import { canUsePremium } from "@/lib/license-status";
-import { ensureSession, getQr, sessionById, startSession } from "@/lib/openwa";
+import { requirePaidHostedWa } from "@/lib/license-status";
+import {
+  ensureSession,
+  friendlyOpenWaMessage,
+  getQr,
+  sessionById,
+  startSession,
+} from "@/lib/openwa";
 import { openwaSettings } from "@/lib/settings";
 import { findLicenseByKey } from "@/lib/licenses";
 import {
@@ -16,7 +22,7 @@ import {
  * Body: { license_key, site_url? }
  */
 export async function POST(req: Request) {
-  const limited = rateLimited(`wa:connect:${clientIp(req)}`, 20, 60_000);
+  const limited = await rateLimited(`wa:connect:${clientIp(req)}`, 20, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as { license_key?: string; site_url?: string };
@@ -40,21 +46,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: siteCheck.error }, { status: 403 });
   }
 
-  const gate = canUsePremium(license);
+  const gate = requirePaidHostedWa(license);
   if (!gate.ok) {
     return NextResponse.json(
       {
-        error:
-          gate.reason === "trial_expired"
-            ? "Trial expired — contact support to continue WhatsApp."
-            : "License inactive or expired.",
+        error: gate.message,
         reason: gate.reason,
       },
       { status: 403 }
     );
   }
 
-  const licLimit = rateLimited(`wa:connect:lic:${license.id}`, 12, 60_000);
+  const licLimit = await rateLimited(`wa:connect:lic:${license.id}`, 12, 60_000);
   if (licLimit) return licLimit;
 
   try {
@@ -70,7 +73,7 @@ export async function POST(req: Request) {
     let status = await fetchSessionStatus(session.id);
     if (status !== "ready" && status !== "qr_ready") {
       await startSession(session.id);
-      await new Promise((r) => setTimeout(r, 600));
+      await new Promise((r) => setTimeout(r, 900));
       status = await fetchSessionStatus(session.id);
     }
 
@@ -86,7 +89,27 @@ export async function POST(req: Request) {
       });
     }
 
-    const qr = await getQr(session.id);
+    let qr = await getQr(session.id);
+    /* Engine often returns QR only after start — retry once if not started yet. */
+    const engine = String(("engineMessage" in qr && qr.engineMessage) || qr.message || "").toLowerCase();
+    if ((!qr.ok || !qr.qr) && (engine.includes("not started") || engine.includes("/start"))) {
+      await startSession(session.id);
+      await new Promise((r) => setTimeout(r, 1200));
+      status = await fetchSessionStatus(session.id);
+      if (status === "ready") {
+        const live = await sessionById(session.id);
+        const phone = live.phone || "";
+        return NextResponse.json({
+          status: "connected",
+          session_id: session.id,
+          phone,
+          qr: null,
+          message: phone ? `Phone connected · ${phone}` : "Phone connected.",
+        });
+      }
+      qr = await getQr(session.id);
+    }
+
     if (qr.ok && qr.qr) {
       const dataUrl = qr.qr.startsWith("data:") ? qr.qr : `data:image/png;base64,${qr.qr.replace(/^base64,/, "")}`;
       return NextResponse.json({
@@ -101,11 +124,11 @@ export async function POST(req: Request) {
       status: status || "starting",
       session_id: session.id,
       qr: null,
-      message: qr.message || "Preparing QR… try again in a moment.",
+      message: friendlyOpenWaMessage(qr.message || "", "Preparing QR… try again in a moment."),
     });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : "Connect failed";
-    return NextResponse.json({ error: msg }, { status: 502 });
+    const raw = e instanceof Error ? e.message : "Connect failed";
+    return NextResponse.json({ error: friendlyOpenWaMessage(raw, "Could not prepare the QR code.") }, { status: 502 });
   }
 }
 

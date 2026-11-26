@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { createHmac, timingSafeEqual } from "crypto";
-import { activatePaid, revokeWhatsAppEntitlement } from "@/lib/billing";
+import {
+  activatePaid,
+  normalizeWaBillingPlan,
+  revokeWhatsAppEntitlement,
+} from "@/lib/billing";
 import { prisma } from "@/lib/prisma";
 import { stripeSettings } from "@/lib/settings";
 import { clientIp, rateLimited } from "@/lib/security";
@@ -10,11 +14,11 @@ export const runtime = "nodejs";
 
 /**
  * Stripe → POST /api/webhooks/stripe
- * checkout.session.completed → mark license paid (payment_status=paid only).
- * refund/dispute → drop WA entitlement.
+ * checkout.session.completed (subscription) → WA monthly/yearly.
+ * subscription deleted / refund / dispute → drop WA entitlement.
  */
 export async function POST(req: Request) {
-  const limited = rateLimited(`stripe:wh:${clientIp(req)}`, 120, 60_000);
+  const limited = await rateLimited(`stripe:wh:${clientIp(req)}`, 120, 60_000);
   if (limited) return limited;
 
   const stripe = await stripeSettings();
@@ -57,6 +61,7 @@ export async function POST(req: Request) {
       const licenseId = String(meta.license_id || session.client_reference_id || "").trim();
       const licenseKey = String(meta.license_key || "").trim();
       const sessionId = String(session.id || "").trim();
+      const plan = normalizeWaBillingPlan(meta.wa_plan);
 
       const license =
         (licenseId && (await prisma.license.findUnique({ where: { id: licenseId } }))) ||
@@ -65,7 +70,10 @@ export async function POST(req: Request) {
 
       if (license) {
         try {
-          await activatePaid(license.id, "Paid via Stripe checkout", { sessionId });
+          await activatePaid(license.id, `Paid via Stripe (${plan})`, {
+            sessionId,
+            plan,
+          });
         } catch (e) {
           const msg = e instanceof Error ? e.message : "activate failed";
           console.error("[stripe webhook] activatePaid", msg);
@@ -74,9 +82,9 @@ export async function POST(req: Request) {
     }
 
     if (
+      event.type === "customer.subscription.deleted" ||
       event.type === "charge.refunded" ||
-      event.type === "charge.dispute.created" ||
-      event.type === "payment_intent.payment_failed"
+      event.type === "charge.dispute.created"
     ) {
       const obj = event.data?.object || {};
       const meta = (obj.metadata || {}) as Record<string, string>;

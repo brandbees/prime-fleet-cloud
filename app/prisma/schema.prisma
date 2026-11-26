@@ -25,10 +25,12 @@ model AppSetting {
 
 model License {
   id              String    @id @default(cuid())
-  /// Plaintext key (issued to customer). Prefer lookups via keyHash.
+  /// Plaintext key (issued to customer). May be blank after re-issue when hash-only mode clears it.
   key             String    @unique
   /// SHA-256 (uppercase key) — indexed lookup + DB-dump hardening aid.
   keyHash         String    @default("")
+  /// Last 4 of key for admin display (PF-••••-••••-ABCD).
+  keyPrefix       String    @default("")
   label           String
   siteUrl         String    @default("")
   /// Legacy WA-facing mirror: none | trial | paid (kept in sync with waEntitlement for old clients).
@@ -51,6 +53,9 @@ model License {
   purchaseSource  String    @default("")
   /// Last Stripe Checkout session that activated paid WA (idempotency).
   lastPaidSessionId String  @default("")
+  /// When Hosted WA became unpaid (Stripe cancel/refund). Null = not in unpaid grace.
+  /// After WA_GRACE_DAYS (default 3) the grace job power-offs the instance (not destroy).
+  waUnpaidAt      DateTime?
   notes           String    @default("")
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
@@ -60,6 +65,30 @@ model License {
   @@index([purchaseCode])
   @@index([keyHash])
   @@index([siteUrl])
+  @@index([waUnpaidAt])
+}
+
+/// Durable rate-limit windows (shared across Node processes).
+model RateLimitBucket {
+  key       String   @id
+  count     Int      @default(0)
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+}
+
+/// Activate / pay / revoke / admin actions.
+model AuditLog {
+  id        String   @id @default(cuid())
+  action    String
+  actor     String   @default("")
+  licenseId String   @default("")
+  ip        String   @default("")
+  meta      String   @default("")
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([licenseId])
+  @@index([createdAt])
 }
 
 /// One-time JWT jti store (activate / pay tokens).

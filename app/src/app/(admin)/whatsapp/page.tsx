@@ -11,7 +11,21 @@ type LicenseSession = {
   status: string;
   phone: string;
   ok: boolean;
+  health?: string;
+  needsReconnect?: boolean;
 };
+
+function sessionBadgeClass(s: LicenseSession) {
+  if (s.status === "ready" || s.health === "ready") return "ok";
+  if (s.needsReconnect || s.health === "needs_reconnect") return "warn";
+  return "off";
+}
+
+function sessionBadgeLabel(s: LicenseSession) {
+  if (s.status === "ready" || s.health === "ready") return "ready";
+  if (s.needsReconnect || s.health === "needs_reconnect") return "needs reconnect";
+  return s.status || "—";
+}
 
 type Status = {
   baseUrl?: string;
@@ -22,7 +36,7 @@ type Status = {
   health?: { ok: boolean; http: number; body: unknown };
   session?: { ok: boolean; status: string; http: number };
   licenseSessions?: LicenseSession[];
-  summary?: { linkedLicenses: number; ready: number; note: string };
+  summary?: { linkedLicenses: number; ready: number; needsReconnect?: number; note: string };
   error?: string;
 };
 
@@ -113,8 +127,8 @@ export default function WhatsAppPage() {
         <div className="page-head__copy">
           <h1>WhatsApp / OpenWA</h1>
           <p className="muted">
-            Point this panel at your OpenWA gateway (shared micro for now). WordPress sites connect
-            through the panel — no <span className="mono">.env</span> edit needed for day-to-day use.
+            Shared / demo OpenWA gateway for paid Hosted WA (until dedicated Webdock VPS). WordPress sites
+            connect through the panel — no <span className="mono">.env</span> edit for day-to-day use.
           </p>
         </div>
         <div className="page-head__actions">
@@ -131,8 +145,8 @@ export default function WhatsAppPage() {
       <div className="card stack">
         <h2 style={{ margin: 0 }}>Gateway (panel-managed)</h2>
         <p className="muted" style={{ margin: 0 }}>
-          Example micro: <span className="mono">http://193.182.128.85:2785</span> + API key from that
-          OpenWA. Later, per-client VPS will be automated from Instances.
+          Interim shared gateway (e.g. DPS) + API key. After Webdock: each paid license gets its own host
+          under <strong>Instances</strong>.
         </p>
         {loading && !settings ? <PanelLoader label="Loading settings…" /> : null}
         {settings ? (
@@ -218,6 +232,12 @@ export default function WhatsAppPage() {
         {!loading && status?.summary?.note ? (
           <p className="muted" style={{ margin: "14px 0 0" }}>
             {status.summary.note}
+            {status.summary.needsReconnect ? (
+              <>
+                {" "}
+                Reconnect steps on the WP site: Connect phone → WhatsApp Linked devices → scan QR → wait for Connected.
+              </>
+            ) : null}
           </p>
         ) : null}
       </div>
@@ -246,7 +266,7 @@ export default function WhatsAppPage() {
                       {s.siteUrl || "—"}
                     </td>
                     <td className="plan-cell">
-                      <span className={`badge ${s.status === "ready" ? "ok" : "off"}`}>{s.status}</span>
+                      <span className={`badge ${sessionBadgeClass(s)}`}>{sessionBadgeLabel(s)}</span>
                     </td>
                     <td className="mono" style={{ whiteSpace: "nowrap" }}>
                       {s.phone ? `+${String(s.phone).replace(/\D/g, "")}` : "—"}

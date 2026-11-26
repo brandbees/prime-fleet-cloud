@@ -8,7 +8,6 @@ import {
   daysLeft,
   normalizeWaEntitlement,
   serverStatusOf,
-  trialExpiryFromNow,
   waExpiry,
   waWriteFields,
   type WaEntitlement,
@@ -44,23 +43,24 @@ export async function POST(req: Request) {
     label?: string;
     siteUrl?: string;
     notes?: string;
-    /** none | trial | paid — hosted WA entitlement (plugin always on). */
+    /** none | paid | monthly | yearly — hosted WA (plugin always on). Trial removed. */
     waPlan?: string;
     plan?: string;
   };
   const label = String(body.label || "").trim() || "Untitled site";
-  const rawWa = String(body.waPlan || body.plan || "trial").trim().toLowerCase();
+  const rawWa = String(body.waPlan || body.plan || "none").trim().toLowerCase();
+  /* Trial mint removed — only paid Monthly/Yearly (or generic paid). */
   let entitlement: WaEntitlement = "none";
-  if (rawWa === "trial") entitlement = "trial";
-  else if (rawWa === "paid" || rawWa === "monthly" || rawWa === "yearly") entitlement = "paid";
+  if (rawWa === "monthly" || rawWa === "yearly") entitlement = rawWa;
+  else if (rawWa === "paid") entitlement = "paid";
   else entitlement = "none";
 
-  const waExpires = entitlement === "trial" ? trialExpiryFromNow(14) : null;
-  const waFields = waWriteFields(entitlement, waExpires);
+  const waFields = waWriteFields(entitlement, null);
 
+  const { plaintext, ...keyData } = newLicenseKeyFields();
   const row = await prisma.license.create({
     data: {
-      ...newLicenseKeyFields(),
+      ...keyData,
       label,
       siteUrl: String(body.siteUrl || "").trim(),
       notes: String(body.notes || "").trim(),
@@ -70,6 +70,18 @@ export async function POST(req: Request) {
       ...waFields,
     },
   });
+
+  try {
+    const { writeAudit } = await import("@/lib/audit");
+    await writeAudit({
+      action: "license.create",
+      actor: admin.email || "admin",
+      licenseId: row.id,
+      meta: { wa: entitlement, keyPrefix: keyData.keyPrefix },
+    });
+  } catch {
+    /* ignore */
+  }
 
   if (entitlement !== "none") {
     try {
@@ -81,5 +93,9 @@ export async function POST(req: Request) {
   }
 
   const fresh = await prisma.license.findUnique({ where: { id: row.id } });
-  return NextResponse.json({ license: fresh || row });
+  return NextResponse.json({
+    license: fresh || row,
+    /** One-time plaintext (same as stored unless LICENSE_CLEAR_PLAINTEXT=1). */
+    license_key: plaintext,
+  });
 }

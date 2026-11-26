@@ -30,14 +30,14 @@ export async function POST(req: Request) {
 
   if (!key) return NextResponse.json({ error: "Missing license_key" }, { status: 400 });
 
-  const byLic = rateLimited(`wa:lic:${key.slice(0, 24)}`, 40, 60_000);
+  const byLic = await rateLimited(`wa:lic:${key.slice(0, 24)}`, 40, 60_000);
   if (byLic) {
     return NextResponse.json(
       { error: "Rate limit — too many WhatsApp sends for this license. Retry shortly." },
       { status: 429, headers: byLic.headers }
     );
   }
-  const byIp = rateLimited(`wa:ip:${ip}`, 80, 60_000);
+  const byIp = await rateLimited(`wa:ip:${ip}`, 80, 60_000);
   if (byIp) return byIp;
 
   const to = normalizeE164(toRaw);
@@ -56,7 +56,7 @@ export async function POST(req: Request) {
     );
   }
 
-  const byTo = rateLimited(`wa:to:${key.slice(0, 24)}:${to}`, 8, 60_000);
+  const byTo = await rateLimited(`wa:to:${key.slice(0, 24)}:${to}`, 8, 60_000);
   if (byTo) {
     return NextResponse.json(
       { error: "Rate limit — too many messages to this number. Retry shortly." },
@@ -77,8 +77,8 @@ export async function POST(req: Request) {
   const gate = canUsePremium(license);
   if (!gate.ok) {
     const msg =
-      gate.reason === "trial_expired"
-        ? "Trial expired — WhatsApp blocked until a paid license is assigned."
+      gate.reason === "no_wa"
+        ? "No WhatsApp plan — choose Monthly or Yearly to send."
         : gate.reason === "expired"
           ? "License expired — WhatsApp blocked."
           : "Invalid or inactive license";

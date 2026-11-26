@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
-import { createHash } from "crypto";
+import { createHash, createHmac } from "crypto";
 import { env } from "./env";
-import { allowRate } from "./rate-limit";
+import { allowRateDurable } from "./rate-limit";
 
 const WEAK_AUTH_SECRETS = new Set([
   "dev-secret-change-me-please-32",
@@ -36,7 +36,7 @@ export function mockEnvatoAllowed() {
   return !isProduction();
 }
 
-/** Public trial mint — off in production unless explicitly enabled. */
+/** Public site bootstrap (plugin key only, no WA) — off in production unless explicitly enabled. */
 export function publicBootstrapAllowed() {
   if (env("ALLOW_PUBLIC_BOOTSTRAP", "") === "1") return true;
   if (env("ALLOW_PUBLIC_BOOTSTRAP", "") === "0") return false;
@@ -173,15 +173,29 @@ export function waDailyQuota() {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : 500;
 }
 
-export function rateLimited(
+export async function rateLimited(
   key: string,
   max: number,
   windowMs: number
-): NextResponse | null {
-  const rl = allowRate(key, max, windowMs);
+): Promise<NextResponse | null> {
+  const rl = await allowRateDurable(key, max, windowMs);
   if (rl.ok) return null;
   return NextResponse.json(
     { error: "Too many requests. Retry shortly." },
     { status: 429, headers: { "Retry-After": String(rl.retryAfterSec) } }
   );
+}
+
+/** HMAC over validate JSON body (excluding sig fields) for WP tamper check. */
+export function signValidatePayload(payload: Record<string, unknown>) {
+  const ts = Math.floor(Date.now() / 1000);
+  const body = { ...payload, ts };
+  const canonical = JSON.stringify(body);
+  const secret = env("AUTH_SECRET", "dev-secret-change-me-please-32");
+  const sig = createHmac("sha256", secret).update(canonical, "utf8").digest("hex");
+  return { ...body, sig };
+}
+
+export function clearPlaintextLicenseKeys() {
+  return env("LICENSE_CLEAR_PLAINTEXT", "") === "1";
 }

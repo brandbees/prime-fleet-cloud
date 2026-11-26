@@ -1,7 +1,9 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
-import { trialExpiryFromNow, waWriteFields, type WaEntitlement } from "@/lib/license-status";
+import { writeAudit } from "@/lib/audit";
+import { reissueLicenseKey } from "@/lib/licenses";
+import { waWriteFields, type WaEntitlement } from "@/lib/license-status";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -14,11 +16,23 @@ export async function PATCH(req: Request, ctx: Ctx) {
     label?: string;
     siteUrl?: string;
     notes?: string;
-    /** paid = WA paid; trial = reset WA trial; none = drop WA entitlement. */
+    /** paid|monthly|yearly = WA paid; none = drop WA. Trial mint removed. */
     plan?: string;
     waPlan?: string;
     serverStatus?: string;
+    /** Rotate license key — returns plaintext once. */
+    reissueKey?: boolean;
   };
+
+  if (body.reissueKey) {
+    const out = await reissueLicenseKey(id, admin.email || "admin");
+    return NextResponse.json({
+      license: out.license,
+      license_key: out.plaintext,
+      masked: out.masked,
+      message: "New key issued. Copy it now — it won’t be shown again in full if plaintext clearing is on.",
+    });
+  }
 
   const data: Record<string, unknown> = {
     ...(typeof body.active === "boolean" ? { active: body.active } : {}),
@@ -32,11 +46,14 @@ export async function PATCH(req: Request, ctx: Ctx) {
     const ent: WaEntitlement = waPlan === "paid" ? "paid" : (waPlan as WaEntitlement);
     Object.assign(data, waWriteFields(ent === "monthly" || ent === "yearly" ? ent : "paid", null));
     data.active = true;
+    data.waUnpaidAt = null;
   } else if (waPlan === "trial") {
-    Object.assign(data, waWriteFields("trial", trialExpiryFromNow(14)));
-    data.active = true;
+    /* Trial product removed — treat as drop WA (no new trial mint). */
+    Object.assign(data, waWriteFields("none", null));
+    data.waUnpaidAt = null;
   } else if (waPlan === "none") {
     Object.assign(data, waWriteFields("none", null));
+    data.waUnpaidAt = null;
   }
 
   if (body.serverStatus !== undefined) {
@@ -48,8 +65,22 @@ export async function PATCH(req: Request, ctx: Ctx) {
 
   const row = await prisma.license.update({ where: { id }, data });
 
-  /* Paid / trial WA → kick mock provision (Webdock HOLD). */
-  if (waPlan === "paid" || waPlan === "monthly" || waPlan === "yearly" || waPlan === "trial") {
+  await writeAudit({
+    action:
+      typeof body.active === "boolean" && body.active === false
+        ? "license.revoke"
+        : waPlan === "none"
+          ? "license.wa_drop"
+          : waPlan
+            ? "license.wa_update"
+            : "license.update",
+    actor: admin.email || "admin",
+    licenseId: id,
+    meta: { waPlan: waPlan || null, active: body.active },
+  });
+
+  /* Paid WA → kick provision. */
+  if (waPlan === "paid" || waPlan === "monthly" || waPlan === "yearly") {
     try {
       const { maybeProvisionAfterWaPaid } = await import("@/lib/provisioner");
       await maybeProvisionAfterWaPaid(id);
@@ -57,7 +88,7 @@ export async function PATCH(req: Request, ctx: Ctx) {
       /* leave serverStatus as-is */
     }
   }
-  if (waPlan === "none") {
+  if (waPlan === "none" || waPlan === "trial") {
     try {
       const { powerOffInstance } = await import("@/lib/provisioner");
       await powerOffInstance(id);
@@ -75,5 +106,10 @@ export async function DELETE(_req: Request, ctx: Ctx) {
   if (!admin) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   const { id } = await ctx.params;
   await prisma.license.delete({ where: { id } });
+  await writeAudit({
+    action: "license.delete",
+    actor: admin.email || "admin",
+    licenseId: id,
+  });
   return NextResponse.json({ ok: true });
 }

@@ -6,8 +6,8 @@ import { clientIp, rateLimited } from "@/lib/security";
 export async function POST(req: Request) {
   const ip = clientIp(req);
   const limited =
-    rateLimited(`marketplace:envato:ip:${ip}`, 10, 60_000) ||
-    rateLimited(`marketplace:envato:global`, 40, 60_000);
+    await rateLimited(`marketplace:envato:ip:${ip}`, 10, 60_000) ||
+    await rateLimited(`marketplace:envato:global`, 40, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as {
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Missing purchase_code" }, { status: 400 });
   }
 
-  const codeLimit = rateLimited(`marketplace:envato:code:${purchaseCode.slice(0, 40)}`, 5, 60_000);
+  const codeLimit = await rateLimited(`marketplace:envato:code:${purchaseCode.slice(0, 40)}`, 5, 60_000);
   if (codeLimit) return codeLimit;
 
   const result = await issueLicenseFromPurchaseCode({

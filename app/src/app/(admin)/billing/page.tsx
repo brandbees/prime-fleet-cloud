@@ -9,8 +9,8 @@ type BillingSettings = {
   stripe_secret_key_masked: string;
   stripe_webhook_secret_set: boolean;
   stripe_webhook_secret_masked: string;
-  stripe_price_id: string;
-  stripe_amount_cents: number;
+  stripe_price_id_monthly: string;
+  stripe_price_id_yearly: string;
   stripe_currency: string;
   webhook_url: string;
   note: string;
@@ -60,8 +60,8 @@ export default function BillingPage() {
         body: JSON.stringify({
           stripe_secret_key: String(fd.get("stripe_secret_key") || ""),
           stripe_webhook_secret: String(fd.get("stripe_webhook_secret") || ""),
-          stripe_price_id: String(fd.get("stripe_price_id") || ""),
-          stripe_amount_cents: String(fd.get("stripe_amount_cents") || "9900"),
+          stripe_price_id_monthly: String(fd.get("stripe_price_id_monthly") || ""),
+          stripe_price_id_yearly: String(fd.get("stripe_price_id_yearly") || ""),
           stripe_currency: String(fd.get("stripe_currency") || "usd"),
         }),
       });
@@ -78,7 +78,7 @@ export default function BillingPage() {
       }
       setOk(
         json.configured
-          ? "Saved. Stripe checkout is live — Upgrade will open Stripe."
+          ? "Saved. Hosted WA checkout uses Stripe Subscriptions (monthly / yearly)."
           : "Saved. Add a Stripe secret key to leave mock checkout."
       );
       await load();
@@ -98,7 +98,9 @@ export default function BillingPage() {
         <div>
           <h1>Billing</h1>
           <p className="muted">
-            Stripe one-time Checkout after trial ends. No Stripe Customers — pay once, license activates via webhook.
+            Hosted WhatsApp subscriptions: <strong>$15/mo</strong> monthly ·{" "}
+            <strong>$10/mo</strong> yearly ($120/yr). Create two recurring Prices in Stripe, paste IDs
+            below. Webhook activates the matching plan.
           </p>
         </div>
         <span className={`badge ${data?.configured ? "ok" : "warn"}`}>
@@ -137,30 +139,44 @@ export default function BillingPage() {
             autoComplete="off"
             placeholder={data?.stripe_webhook_secret_set ? data.stripe_webhook_secret_masked : "whsec_…"}
           />
-          <span className="muted">From `stripe listen` (whsec_…) for local tests.</span>
+          <span className="muted">Dashboard webhook or `stripe listen` → forward to URL below.</span>
         </label>
 
         <label className="field">
-          <span>Webhook URL (CLI forward / Dashboard)</span>
+          <span>Webhook URL</span>
           <input readOnly value={data?.webhook_url || ""} onFocus={(e) => e.currentTarget.select()} />
+          <span className="muted">
+            Events: checkout.session.completed · customer.subscription.deleted · charge.refunded ·
+            charge.dispute.created
+          </span>
         </label>
 
         <label className="field">
-          <span>Price ID (optional)</span>
-          <input name="stripe_price_id" defaultValue={data?.stripe_price_id || ""} placeholder="price_… (or leave empty)" />
-          <span className="muted">If empty, amount below is used as a one-off line item.</span>
+          <span>Monthly price ID ($15 / month)</span>
+          <input
+            name="stripe_price_id_monthly"
+            defaultValue={data?.stripe_price_id_monthly || ""}
+            placeholder="price_… recurring monthly"
+          />
         </label>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          <label className="field">
-            <span>Amount (cents)</span>
-            <input name="stripe_amount_cents" type="number" min={50} defaultValue={data?.stripe_amount_cents || 9900} />
-          </label>
-          <label className="field">
-            <span>Currency</span>
-            <input name="stripe_currency" defaultValue={data?.stripe_currency || "usd"} />
-          </label>
-        </div>
+        <label className="field">
+          <span>Yearly price ID ($10/mo → $120 / year)</span>
+          <input
+            name="stripe_price_id_yearly"
+            defaultValue={data?.stripe_price_id_yearly || ""}
+            placeholder="price_… recurring yearly"
+          />
+        </label>
+
+        <label className="field">
+          <span>Currency</span>
+          <input name="stripe_currency" defaultValue={data?.stripe_currency || "usd"} />
+          <span className="muted">
+            If a Price ID is empty, Checkout builds price_data at $15/mo or $120/yr for that plan
+            (still subscription mode — Dashboard Prices recommended for production).
+          </span>
+        </label>
 
         <button type="submit" className="btn btn-primary" disabled={busy} aria-busy={busy}>
           {busy ? (

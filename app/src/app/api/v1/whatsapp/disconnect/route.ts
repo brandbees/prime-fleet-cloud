@@ -16,7 +16,7 @@ import {
  * Body: { license_key, site_url? } or header X-Prime-Fleet-License
  */
 export async function POST(req: Request) {
-  const limited = rateLimited(`wa:disconnect:${clientIp(req)}`, 15, 60_000);
+  const limited = await rateLimited(`wa:disconnect:${clientIp(req)}`, 15, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as { license_key?: string; site_url?: string };

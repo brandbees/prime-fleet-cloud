@@ -6,6 +6,7 @@ import { Loader, PanelLoader } from "@/components/Loader";
 type License = {
   id: string;
   key: string;
+  keyPrefix?: string;
   label: string;
   siteUrl: string;
   plan: string;
@@ -24,6 +25,14 @@ type License = {
   daysLeft?: number | null;
 };
 
+function displayKey(r: License) {
+  if (r.key?.startsWith("PF-HASHONLY-") || !r.key) {
+    const p = (r.keyPrefix || "????").toUpperCase();
+    return `PF-••••-••••-${p}`;
+  }
+  return r.key;
+}
+
 function pluginBadge(r: License) {
   if (!r.active || r.pluginOk === false) return <span className="badge off">plugin off</span>;
   return <span className="badge ok">plugin on</span>;
@@ -31,28 +40,20 @@ function pluginBadge(r: License) {
 
 function waBadge(r: License) {
   const ent = (r.waEntitlement || r.plan || "none").toLowerCase();
-  if (ent === "none") return <span className="badge off">WA none</span>;
-  if (r.gateReason === "trial_expired" || r.gateReason === "expired") {
-    return <span className="badge off">{ent === "trial" ? "WA trial expired" : "WA expired"}</span>;
-  }
-  if (ent === "trial") {
-    const left = typeof r.daysLeft === "number" ? r.daysLeft : null;
-    return (
-      <span className="badge warn">
-        WA trial{left !== null ? ` · ${left}d` : ""}
-      </span>
-    );
+  if (ent === "none" || ent === "trial") return <span className="badge off">WA none</span>;
+  if (r.gateReason === "expired") {
+    return <span className="badge off">WA expired</span>;
   }
   return <span className="badge ok">WA {ent === "paid" ? "paid" : ent}</span>;
 }
 
 function serverBadge(r: License) {
   const s = (r.serverStatus || "none").toLowerCase();
-  if (s === "running") return <span className="badge ok">server running</span>;
-  if (s === "provisioning") return <span className="badge warn">provisioning</span>;
-  if (s === "error") return <span className="badge off">server error</span>;
-  if (s === "stopped") return <span className="badge off">server off</span>;
-  return <span className="badge off">server none</span>;
+  if (s === "provisioning") return <span className="badge warn">Provisioning…</span>;
+  if (s === "running") return <span className="badge ok">Ready</span>;
+  if (s === "stopped") return <span className="badge off">Powered off</span>;
+  if (s === "error") return <span className="badge off">Error</span>;
+  return <span className="badge off">None</span>;
 }
 
 /** Checkout/system writes into notes — hide those under the label. */
@@ -123,7 +124,7 @@ export default function LicensesPage() {
           label: fd.get("label"),
           siteUrl: fd.get("siteUrl"),
           notes: fd.get("notes"),
-          waPlan: fd.get("waPlan") || "trial",
+          waPlan: fd.get("waPlan") || "none",
         }),
       });
       if (!res.ok) {
@@ -141,11 +142,15 @@ export default function LicensesPage() {
   }
 
   async function patch(id: string, body: Record<string, unknown>) {
-    await fetch(`/api/licenses/${id}`, {
+    const res = await fetch(`/api/licenses/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
+    const data = await res.json().catch(() => ({}));
+    if (body.reissueKey && data.license_key) {
+      window.prompt("New license key (copy now):", String(data.license_key));
+    }
     await load();
   }
 
@@ -175,8 +180,9 @@ export default function LicensesPage() {
         <div className="page-head__copy">
           <h1>Licenses</h1>
           <p className="muted">
-            Plugin unlock ($49) is always on the key. Hosted WhatsApp is a separate entitlement (trial / paid).
-            Server uses <strong>mock provision</strong> while Webdock is on hold — see Instances.
+            Plugin unlock ($49) is always on the key. Hosted WhatsApp is separate (Monthly / Yearly paid — no
+            trial). After pay, provision runs on shared/demo now; dedicated VPS per customer after Webdock.
+            Lifecycle: <strong>Instances</strong>.
           </p>
         </div>
         <div className="page-head__actions">{busy || loading ? <Loader /> : null}</div>
@@ -198,7 +204,7 @@ export default function LicensesPage() {
             <select
               id="waPlan"
               name="waPlan"
-              defaultValue="trial"
+              defaultValue="none"
               style={{
                 height: 40,
                 padding: "0 12px",
@@ -208,7 +214,6 @@ export default function LicensesPage() {
               }}
             >
               <option value="none">Plugin only (no WA)</option>
-              <option value="trial">14-day WA trial</option>
               <option value="paid">WA paid (no expiry)</option>
             </select>
           </div>
@@ -262,10 +267,10 @@ export default function LicensesPage() {
                     </td>
                     <td>
                       <div className="key-cell">
-                        <code className="key-cell__value" title={r.key}>
-                          {r.key}
+                        <code className="key-cell__value" title={displayKey(r)}>
+                          {displayKey(r)}
                         </code>
-                        <CopyKeyButton value={r.key} />
+                        {!r.key?.startsWith("PF-HASHONLY-") ? <CopyKeyButton value={r.key} /> : null}
                       </div>
                     </td>
                     <td className="muted cell-clamp" title={r.siteUrl || undefined}>
@@ -279,24 +284,36 @@ export default function LicensesPage() {
                     </td>
                     <td>
                       <div className="actions">
-                        {(r.waEntitlement === "trial" ||
+                        {(r.waEntitlement === "none" ||
+                          r.plan === "none" ||
                           r.plan === "trial" ||
-                          r.gateReason === "trial_expired") && (
+                          r.waEntitlement === "trial") && (
                           <button
                             type="button"
                             className="btn btn-primary"
                             onClick={() => patch(r.id, { waPlan: "paid" })}
                           >
-                            Convert WA to paid
+                            Grant WA paid
                           </button>
                         )}
-                        {(r.waEntitlement === "none" || r.plan === "none") && (
+                        {["paid", "monthly", "yearly"].includes(
+                          String(r.waEntitlement || r.plan || "").toLowerCase()
+                        ) && (
                           <button
                             type="button"
                             className="btn"
-                            onClick={() => patch(r.id, { waPlan: "trial" })}
+                            title="Drop Hosted WA so WP Update plan → mock/Stripe checkout can run"
+                            onClick={() => {
+                              if (
+                                confirm(
+                                  "Clear Hosted WA entitlement? WP will show locked + Monthly/Yearly checkout (mock if Stripe off)."
+                                )
+                              ) {
+                                patch(r.id, { waPlan: "none" });
+                              }
+                            }}
                           >
-                            Add WA trial
+                            Clear WA (mock pay test)
                           </button>
                         )}
                         {(r.serverStatus === "none" ||
@@ -315,6 +332,18 @@ export default function LicensesPage() {
                         ) : null}
                         <button type="button" className="btn" onClick={() => patch(r.id, { active: !r.active })}>
                           {r.active ? "Revoke plugin" : "Enable plugin"}
+                        </button>
+                        <button
+                          type="button"
+                          className="btn"
+                          title="Rotate key — old key stops working"
+                          onClick={() => {
+                            if (confirm("Re-issue license key? The old key will stop working immediately.")) {
+                              patch(r.id, { reissueKey: true });
+                            }
+                          }}
+                        >
+                          Re-issue key
                         </button>
                         <button type="button" className="btn btn-danger" onClick={() => remove(r.id)}>
                           Delete

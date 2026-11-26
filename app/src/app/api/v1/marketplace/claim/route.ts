@@ -11,7 +11,7 @@ import {
 
 /** WP redeems one-time activate token → license key (auto-save). */
 export async function POST(req: Request) {
-  const limited = rateLimited(`marketplace:claim:${clientIp(req)}`, 20, 60_000);
+  const limited = await rateLimited(`marketplace:claim:${clientIp(req)}`, 20, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as {

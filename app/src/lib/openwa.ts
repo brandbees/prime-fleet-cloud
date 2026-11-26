@@ -154,6 +154,32 @@ export async function disconnectSession(sessionId: string) {
   };
 }
 
+/** Map OpenWA engine errors to product copy (never show raw API docs to admins). */
+export function friendlyOpenWaMessage(raw: string, fallback = "Preparing WhatsApp link…") {
+  const msg = String(raw || "").trim();
+  if (!msg) return fallback;
+  const lower = msg.toLowerCase();
+  if (
+    lower.includes("not started") ||
+    lower.includes("/sessions/") ||
+    lower.includes("call post") ||
+    lower.includes("sessionid/start")
+  ) {
+    return "Starting WhatsApp link…";
+  }
+  if (lower.includes("api key") || lower.includes("unauthorized") || lower.includes("forbidden")) {
+    return "Messaging gateway is not ready. Try again in a moment.";
+  }
+  if (lower.includes("timeout") || lower.includes("timed out")) {
+    return "WhatsApp link timed out. Tap Connect phone to try again.";
+  }
+  /* Strip obvious internal paths / HTTP jargon. */
+  if (/\/api\//i.test(msg) || /\bPOST\b/.test(msg) || /\bGET\b/.test(msg)) {
+    return fallback;
+  }
+  return msg.length > 160 ? fallback : msg;
+}
+
 export async function getQr(sessionId: string) {
   const { baseUrl, apiKey } = await cfg();
   if (!apiKey) throw new Error("OpenWA API key missing — set it in Panel → WhatsApp");
@@ -169,11 +195,13 @@ export async function getQr(sessionId: string) {
     /* ignore */
   }
   if (!res.ok) {
+    const engineMsg = typeof data.message === "string" ? data.message : raw.slice(0, 200);
     return {
       ok: false as const,
       http: res.status,
       qr: "",
-      message: typeof data.message === "string" ? data.message : raw.slice(0, 200),
+      message: friendlyOpenWaMessage(engineMsg, "Preparing QR…"),
+      engineMessage: engineMsg,
     };
   }
   const qr =

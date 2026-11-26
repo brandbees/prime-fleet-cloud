@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { newLicenseKeyFields } from "@/lib/licenses";
-import { trialExpiryFromNow, waWriteFields } from "@/lib/license-status";
+import { waWriteFields } from "@/lib/license-status";
 import {
   assertSiteBound,
   clientIp,
@@ -11,8 +11,8 @@ import {
 } from "@/lib/security";
 
 /**
- * First-time site registration. Creates a trial license.
- * Disabled in production unless ALLOW_PUBLIC_BOOTSTRAP=1.
+ * First-time site registration — plugin license only (WA = none).
+ * Hosted WA trial mint removed (boss 26 Nov). Disabled in production unless ALLOW_PUBLIC_BOOTSTRAP=1.
  * Never re-leaks an existing key unless the caller already proves they have it.
  */
 export async function POST(req: Request) {
@@ -20,7 +20,7 @@ export async function POST(req: Request) {
     return NextResponse.json(
       {
         error:
-          "Self-serve trial bootstrap is disabled. Activate with your Envato purchase code or ask support for a key.",
+          "Self-serve license signup is disabled. Activate with your Envato purchase code or ask support for a key.",
       },
       { status: 403 }
     );
@@ -43,9 +43,9 @@ export async function POST(req: Request) {
   }
 
   const limited =
-    rateLimited(`bootstrap:site:${siteUrl}`, 5, 60_000) ||
-    rateLimited(`bootstrap:ip:${ip}`, 10, 60_000) ||
-    rateLimited(`bootstrap:global`, 60, 60_000);
+    (await rateLimited(`bootstrap:site:${siteUrl}`, 5, 60_000)) ||
+    (await rateLimited(`bootstrap:ip:${ip}`, 10, 60_000)) ||
+    (await rateLimited(`bootstrap:global`, 60, 60_000));
   if (limited) return limited;
 
   const existing = await prisma.license.findFirst({
@@ -79,22 +79,34 @@ export async function POST(req: Request) {
     );
   }
 
-  const trialExp = trialExpiryFromNow(14);
+  const { plaintext, ...keyData } = newLicenseKeyFields();
   const license = await prisma.license.create({
     data: {
-      ...newLicenseKeyFields(),
+      ...keyData,
       label: siteName,
       siteUrl,
-      ...waWriteFields("trial", trialExp),
+      ...waWriteFields("none", null),
       active: true,
       serverStatus: "none",
       serverIp: "",
-      notes: "auto-bootstrap",
+      notes: "auto-bootstrap (plugin only; WA via paid upgrade)",
     },
   });
 
+  try {
+    const { writeAudit } = await import("@/lib/audit");
+    await writeAudit({
+      action: "license.bootstrap",
+      licenseId: license.id,
+      ip,
+      meta: { siteUrl, wa: "none" },
+    });
+  } catch {
+    /* ignore */
+  }
+
   return NextResponse.json({
-    license_key: license.key,
+    license_key: plaintext,
     plan: license.plan,
     wa_entitlement: license.waEntitlement,
     expires_at: license.waExpiresAt || license.expiresAt,

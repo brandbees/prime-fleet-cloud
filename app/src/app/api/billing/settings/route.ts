@@ -20,11 +20,11 @@ export async function GET() {
     stripe_secret_key_masked: mask(s.secretKey),
     stripe_webhook_secret_set: Boolean(s.webhookSecret),
     stripe_webhook_secret_masked: mask(s.webhookSecret),
-    stripe_price_id: s.priceId,
-    stripe_amount_cents: s.amountCents,
+    stripe_price_id_monthly: s.priceIdMonthly,
+    stripe_price_id_yearly: s.priceIdYearly,
     stripe_currency: s.currency,
     webhook_url: `${panelPublicUrl()}/api/webhooks/stripe`,
-    note: "One-time Checkout only — no Stripe Customer objects.",
+    note: "Subscription Checkout: Monthly $15 · Yearly $10/mo ($120/yr). Paste two Stripe Price IDs (recurring).",
   });
 }
 
@@ -36,8 +36,8 @@ export async function POST(req: Request) {
   const pairs: Array<[string, string]> = [
     ["stripe_secret_key", String(body.stripe_secret_key ?? "").trim()],
     ["stripe_webhook_secret", String(body.stripe_webhook_secret ?? "").trim()],
-    ["stripe_price_id", String(body.stripe_price_id ?? "").trim()],
-    ["stripe_amount_cents", String(body.stripe_amount_cents ?? "").trim()],
+    ["stripe_price_id_monthly", String(body.stripe_price_id_monthly ?? "").trim()],
+    ["stripe_price_id_yearly", String(body.stripe_price_id_yearly ?? "").trim()],
     ["stripe_currency", String(body.stripe_currency ?? "").trim().toLowerCase()],
   ];
 

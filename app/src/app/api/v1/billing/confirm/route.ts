@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { activatePaid } from "@/lib/billing";
+import { activatePaid, normalizeWaBillingPlan } from "@/lib/billing";
 import { prisma } from "@/lib/prisma";
 import { stripeSettings } from "@/lib/settings";
 import { findLicenseByKey } from "@/lib/licenses";
@@ -10,7 +10,7 @@ import { clientIp, rateLimited } from "@/lib/security";
  * Only activates when Stripe reports payment_status=paid. Idempotent.
  */
 export async function POST(req: Request) {
-  const limited = rateLimited(`billing:confirm:${clientIp(req)}`, 20, 60_000);
+  const limited = await rateLimited(`billing:confirm:${clientIp(req)}`, 20, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as { session_id?: string };
@@ -60,11 +60,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "License not found for this payment" }, { status: 404 });
   }
 
+  const plan = normalizeWaBillingPlan(session.metadata?.wa_plan);
   try {
-    await activatePaid(license.id, "Paid via Stripe checkout", { sessionId });
+    await activatePaid(license.id, `Paid via Stripe checkout (${plan})`, {
+      sessionId,
+      plan,
+    });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Activation failed";
     return NextResponse.json({ error: msg }, { status: 403 });
   }
-  return NextResponse.json({ ok: true, plan: "paid", license_key: license.key });
+  return NextResponse.json({ ok: true, plan, license_key: license.key });
 }

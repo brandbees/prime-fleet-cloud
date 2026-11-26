@@ -14,19 +14,20 @@ import {
   clientIp,
   normalizeSiteUrl,
   rateLimited,
+  signValidatePayload,
 } from "@/lib/security";
 
 /** Plugin calls this with license key — no admin cookie. */
 export async function POST(req: Request) {
   const ip = clientIp(req);
-  const limited = rateLimited(`validate:ip:${ip}`, 60, 60_000);
+  const limited = await rateLimited(`validate:ip:${ip}`, 60, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as { license_key?: string; site_url?: string };
   const key = String(body.license_key || req.headers.get("x-prime-fleet-license") || "").trim();
   if (!key) return NextResponse.json({ valid: false, error: "Missing license_key" }, { status: 400 });
 
-  const keyLimit = rateLimited(`validate:key:${key.slice(0, 24)}`, 30, 60_000);
+  const keyLimit = await rateLimited(`validate:key:${key.slice(0, 24)}`, 30, 60_000);
   if (keyLimit) return keyLimit;
 
   const license = await findLicenseByKey(key);
@@ -68,8 +69,8 @@ export async function POST(req: Request) {
     });
   }
 
-  return NextResponse.json({
-    valid: true,
+  const payload = {
+    valid: true as const,
     label: license.label,
     plugin: { ok: true, reason: "ok" },
     whatsapp: {
@@ -90,5 +91,7 @@ export async function POST(req: Request) {
     plan: license.plan,
     expires_at: exp,
     days_left: daysLeft(exp),
-  });
+  };
+
+  return NextResponse.json(signValidatePayload(payload));
 }

@@ -11,13 +11,13 @@ export async function POST(req: Request) {
       { status: 403 }
     );
   }
-  const limited = rateLimited(`pay:mock:${clientIp(req)}`, 15, 60_000);
+  const limited = await rateLimited(`pay:mock:${clientIp(req)}`, 15, 60_000);
   if (limited) return limited;
 
   if (await stripeConfigured()) {
     return NextResponse.json({ error: "Use Stripe checkout in production." }, { status: 400 });
   }
-  const body = (await req.json().catch(() => ({}))) as { token?: string };
+  const body = (await req.json().catch(() => ({}))) as { token?: string; plan?: string };
   const token = String(body.token || "").trim();
   if (!token) return NextResponse.json({ error: "Missing token" }, { status: 400 });
 
@@ -30,8 +30,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Pay token already used" }, { status: 400 });
       }
     }
-    await activatePaid(parsed.licenseId, "Paid via mock checkout");
-    return NextResponse.json({ ok: true, plan: "paid" });
+    const plan = parsed.plan;
+    await activatePaid(parsed.licenseId, `Paid via mock checkout (${plan})`, { plan });
+    return NextResponse.json({ ok: true, plan });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Invalid token";
     return NextResponse.json({ error: msg }, { status: 400 });

@@ -1,9 +1,17 @@
 /**
  * Hosted WhatsApp instance provisioner.
- * Webdock is HOLD — default provider is mock (local). Swap provider later without changing call sites.
+ * Providers:
+ *  - mock (default) — local demo IP + shared OPENWA_BASE_URL
+ *  - shared — SSH bootstrap on WA_VPS_HOST, then bind OpenWA session to license
+ * Webdock / dedicated VPS create remains HOLD (needs operator 2FA access).
+ *
+ * N8.1: provision + OpenWA bind only for paid Monthly/Yearly (never trial / none).
  */
 import { prisma } from "./prisma";
-import { canUseWhatsApp, normalizeWaEntitlement } from "./license-status";
+import {
+  normalizeWaEntitlement,
+  requirePaidHostedWa,
+} from "./license-status";
 
 export type InstanceStatus = "none" | "provisioning" | "running" | "error" | "stopped";
 
@@ -18,6 +26,10 @@ function mockIpFor(licenseId: string) {
   const c = (h >> 8) & 0xff;
   const d = (h & 0xfe) + 1;
   return `${a}.${b}.${c}.${d}`;
+}
+
+function activeProvider() {
+  return (process.env.WA_PROVIDER || "mock").trim().toLowerCase();
 }
 
 async function syncLicenseMirror(licenseId: string, status: InstanceStatus, ip: string) {
@@ -51,22 +63,25 @@ export async function listInstances() {
 }
 
 /**
- * Start (or restart) mock provision after WA paid / operator retry.
+ * Start (or restart) provision after WA paid / operator retry.
  * Idempotent: one instance row per license.
+ * Refuses trial / none / expired (N8.1).
  */
-export async function startProvision(licenseId: string, note = "mock provision started") {
+export async function startProvision(licenseId: string, note = "provision started") {
   const license = await prisma.license.findUnique({ where: { id: licenseId } });
   if (!license) throw new Error("License not found");
-  const wa = canUseWhatsApp(license);
-  if (!wa.ok) throw new Error("Hosted WhatsApp entitlement required before provision");
+  const wa = requirePaidHostedWa(license);
+  if (!wa.ok) throw new Error(wa.message);
 
-  const provider = process.env.WA_PROVIDER || "mock";
-  if (provider !== "mock") {
-    throw new Error(`Provider "${provider}" not implemented yet (Webdock HOLD). Use mock.`);
+  const provider = activeProvider();
+  if (provider !== "mock" && provider !== "shared") {
+    throw new Error(
+      `Provider "${provider}" is not enabled. Use WA_PROVIDER=mock or WA_PROVIDER=shared. Dedicated Webdock create is HOLD.`
+    );
   }
 
   const existing = await prisma.waInstance.findUnique({ where: { licenseId } });
-  if (existing?.status === "running" && existing.ip) {
+  if (existing?.status === "running" && existing.ip && license.openwaSessionId) {
     await syncLicenseMirror(licenseId, "running", existing.ip);
     return existing;
   }
@@ -75,8 +90,8 @@ export async function startProvision(licenseId: string, note = "mock provision s
     where: { licenseId },
     create: {
       licenseId,
-      provider: "mock",
-      providerId: `mock-${licenseId.slice(-8)}`,
+      provider,
+      providerId: `${provider}-${licenseId.slice(-8)}`,
       status: "provisioning",
       ip: "",
       openwaBaseUrl: "",
@@ -85,12 +100,9 @@ export async function startProvision(licenseId: string, note = "mock provision s
       poweredOffAt: null,
     },
     update: {
-      provider: "mock",
+      provider,
       status: "provisioning",
-      ip: "",
-      openwaBaseUrl: "",
       lastError: "",
-      provisionedAt: null,
       poweredOffAt: null,
     },
   });
@@ -99,18 +111,108 @@ export async function startProvision(licenseId: string, note = "mock provision s
     where: { id: licenseId },
     data: {
       serverStatus: "provisioning",
-      serverIp: "",
       notes: note.slice(0, 500),
     },
   });
 
+  if (provider === "shared") {
+    return completeSharedProvision(licenseId, note);
+  }
+
   return row;
 }
 
-/** Advance mock boxes that have been provisioning long enough. Safe to call on every status poll. */
-export async function tickMockProvision(licenseId: string) {
+/** Abort in-flight provision when entitlement is not paid. */
+async function refuseUnpaidProvision(licenseId: string, message: string) {
   const inst = await prisma.waInstance.findUnique({ where: { licenseId } });
-  if (!inst || inst.provider !== "mock") return inst;
+  if (inst && (inst.status === "provisioning" || inst.status === "running")) {
+    try {
+      await markInstanceError(licenseId, message);
+    } catch {
+      /* no row */
+    }
+  }
+  return null;
+}
+
+/** Shared VPS: SSH bootstrap → persist gateway → ensure OpenWA session on license. */
+async function completeSharedProvision(licenseId: string, note: string) {
+  try {
+    const license = await prisma.license.findUnique({ where: { id: licenseId } });
+    if (!license) throw new Error("License not found");
+    const wa = requirePaidHostedWa(license);
+    if (!wa.ok) {
+      await refuseUnpaidProvision(licenseId, wa.message);
+      throw new Error(wa.message);
+    }
+
+    const { ensureSharedOpenWa } = await import("./vps-bootstrap");
+    const ready = await ensureSharedOpenWa();
+
+    const { ensureSession } = await import("./openwa");
+    const sessionName = `pf-${licenseId.slice(0, 8)}`;
+    const session = await ensureSession(sessionName, license.openwaSessionId || "");
+
+    const updated = await prisma.waInstance.update({
+      where: { licenseId },
+      data: {
+        provider: "shared",
+        providerId: `shared-${ready.ip}`,
+        status: "running",
+        ip: ready.ip,
+        openwaBaseUrl: ready.baseUrl,
+        lastError: "",
+        provisionedAt: new Date(),
+        poweredOffAt: null,
+      },
+    });
+
+    await prisma.license.update({
+      where: { id: licenseId },
+      data: {
+        openwaSessionId: session.id,
+        serverStatus: "running",
+        serverIp: ready.ip,
+        notes: `${note} → shared OpenWA session ${session.id.slice(0, 8)}`.slice(0, 500),
+      },
+    });
+
+    return updated;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Shared provision failed";
+    await markInstanceError(licenseId, msg);
+    throw e;
+  }
+}
+
+/**
+ * Advance mock boxes that have been provisioning long enough.
+ * Safe to call on every status poll — no-ops (and errors the box) if not paid.
+ */
+export async function tickMockProvision(licenseId: string) {
+  const license = await prisma.license.findUnique({ where: { id: licenseId } });
+  if (!license) return null;
+
+  const wa = requirePaidHostedWa(license);
+  const inst = await prisma.waInstance.findUnique({ where: { licenseId } });
+  if (!inst) return inst;
+
+  if (!wa.ok) {
+    if (inst.status === "provisioning") {
+      await refuseUnpaidProvision(licenseId, wa.message);
+    }
+    return prisma.waInstance.findUnique({ where: { licenseId } });
+  }
+
+  if (inst.provider === "shared" && inst.status === "provisioning") {
+    // Retry shared bind if a previous run left us mid-flight.
+    try {
+      return await completeSharedProvision(licenseId, "shared provision retry");
+    } catch {
+      return prisma.waInstance.findUnique({ where: { licenseId } });
+    }
+  }
+  if (inst.provider !== "mock") return inst;
   if (inst.status !== "provisioning") return inst;
 
   const age = Date.now() - new Date(inst.updatedAt).getTime();
@@ -144,7 +246,7 @@ export async function powerOffInstance(licenseId: string) {
   const inst = await prisma.waInstance.findUnique({ where: { licenseId } });
   if (!inst) throw new Error("No instance for this license");
 
-  // Webdock HOLD: mock power-off only (no destroy).
+  // Shared VPS: keep OpenWA host running; only stop the license binding / mirror.
   const updated = await prisma.waInstance.update({
     where: { id: inst.id },
     data: {
@@ -197,14 +299,14 @@ export async function markInstanceError(licenseId: string, message: string) {
   return updated;
 }
 
-/** After converting to paid in admin — kick mock provision if none/stopped. */
+/** After converting to paid in admin — kick provision if none/stopped. Never trial. */
 export async function maybeProvisionAfterWaPaid(licenseId: string) {
   const license = await prisma.license.findUnique({ where: { id: licenseId } });
   if (!license) return null;
   if (normalizeWaEntitlement(license) === "none") return null;
-  const wa = canUseWhatsApp(license);
+  const wa = requirePaidHostedWa(license);
   if (!wa.ok) return null;
   const inst = await prisma.waInstance.findUnique({ where: { licenseId } });
-  if (inst?.status === "running") return inst;
+  if (inst?.status === "running" && license.openwaSessionId) return inst;
   return startProvision(licenseId, "auto provision after WA paid");
 }

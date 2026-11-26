@@ -98,7 +98,7 @@ export async function issueLicenseFromPurchaseCode(opts: {
     String(opts.label || "").trim() ||
     (verified.buyer ? `Envato · ${verified.buyer}` : verified.itemName || "Envato purchase");
 
-  const keyFields = newLicenseKeyFields();
+  const { plaintext, ...keyFields } = newLicenseKeyFields();
   try {
     const row = await prisma.license.create({
       data: {
@@ -117,7 +117,7 @@ export async function issueLicenseFromPurchaseCode(opts: {
       },
     });
 
-    const token = await signActivateToken(row.key, siteUrl);
+    const token = await signActivateToken(plaintext, siteUrl);
     return {
       ok: true as const,
       license: row,

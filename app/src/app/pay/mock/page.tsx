@@ -6,9 +6,13 @@ import { Suspense, useState } from "react";
 function MockPayInner() {
   const sp = useSearchParams();
   const token = sp.get("token") || "";
+  const plan = (sp.get("plan") || "monthly").toLowerCase() === "yearly" ? "yearly" : "monthly";
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState("");
+
+  const priceLabel =
+    plan === "yearly" ? "$10/mo · billed yearly ($120/yr)" : "$15/mo · month-to-month";
 
   async function pay() {
     setBusy(true);
@@ -17,7 +21,7 @@ function MockPayInner() {
       const res = await fetch("/api/pay/mock/confirm", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token }),
+        body: JSON.stringify({ token, plan }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Payment failed");
@@ -38,7 +42,7 @@ function MockPayInner() {
       <main style={wrap}>
         <h1 style={{ margin: "0 0 8px" }}>Payment complete</h1>
         <p style={{ color: "#64748b", margin: 0 }}>
-          WhatsApp is unlocked. Return to your WordPress admin — Settings → WhatsApp.
+          Hosted WhatsApp ({plan}) is unlocked. Return to WordPress → Settings → WhatsApp.
         </p>
       </main>
     );
@@ -47,8 +51,11 @@ function MockPayInner() {
   return (
     <main style={wrap}>
       <h1 style={{ margin: "0 0 8px" }}>Upgrade WhatsApp</h1>
-      <p style={{ color: "#64748b", margin: "0 0 20px" }}>
-        Local / test checkout (Stripe not configured). This activates your license as paid.
+      <p style={{ color: "#64748b", margin: "0 0 8px" }}>
+        Local / test checkout (Stripe not configured).
+      </p>
+      <p style={{ margin: "0 0 20px", fontWeight: 600 }}>
+        {plan === "yearly" ? "Yearly" : "Monthly"} — {priceLabel}
       </p>
       {error ? <p style={{ color: "#b91c1c" }}>{error}</p> : null}
       <button type="button" onClick={pay} disabled={busy} style={btn}>

@@ -1,6 +1,7 @@
 import { createHash, randomBytes } from "crypto";
 import { prisma } from "./prisma";
-import { hashLicenseKey } from "./security";
+import { clearPlaintextLicenseKeys, hashLicenseKey } from "./security";
+import { writeAudit } from "./audit";
 
 export function generateLicenseKey() {
   const a = randomBytes(4).toString("hex").toUpperCase();
@@ -9,12 +10,49 @@ export function generateLicenseKey() {
   return `PF-${a}-${b}-${c}`;
 }
 
-/** Fields to set whenever a new plaintext key is issued. */
+export function keyPrefixOf(key: string) {
+  const t = String(key || "").trim().toUpperCase();
+  if (t.length < 4) return t;
+  return t.slice(-4);
+}
+
+export function maskLicenseKey(key: string, prefix = "") {
+  const p = (prefix || keyPrefixOf(key) || "????").toUpperCase();
+  return `PF-••••-••••-${p}`;
+}
+
+/**
+ * DB fields for a new key. `plaintext` is the customer-facing key (always).
+ * When LICENSE_CLEAR_PLAINTEXT=1, stored `key` is a placeholder; lookups use keyHash.
+ */
 export function newLicenseKeyFields(key = generateLicenseKey()) {
+  const clear = clearPlaintextLicenseKeys();
+  const storageKey = clear
+    ? `PF-HASHONLY-${randomBytes(8).toString("hex").toUpperCase()}`
+    : key;
   return {
-    key,
+    key: storageKey,
     keyHash: hashLicenseKey(key),
+    keyPrefix: keyPrefixOf(key),
+    plaintext: key,
   };
+}
+
+/** Re-issue key — returns plaintext once. Old key stops working. */
+export async function reissueLicenseKey(licenseId: string, actor = "admin") {
+  const fields = newLicenseKeyFields();
+  const { plaintext, ...data } = fields;
+  const row = await prisma.license.update({
+    where: { id: licenseId },
+    data,
+  });
+  await writeAudit({
+    action: "license.reissue",
+    actor,
+    licenseId,
+    meta: { keyPrefix: data.keyPrefix },
+  });
+  return { license: row, plaintext, masked: maskLicenseKey(plaintext) };
 }
 
 export async function findLicenseByKey(key: string) {

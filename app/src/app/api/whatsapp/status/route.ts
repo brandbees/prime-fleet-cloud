@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireAdmin } from "@/lib/auth";
+import { classifySessionHealth } from "@/lib/license-status";
 import { health, sessionById, sessionStatus } from "@/lib/openwa";
 import { openwaSettings } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
@@ -25,6 +26,13 @@ export async function GET() {
       const live = sid
         ? await sessionById(sid)
         : { ok: false, status: "none", phone: "", http: 0, body: null as unknown };
+      const phoneConnected =
+        live.ok && ["ready", "connected", "open"].includes(String(live.status || "").toLowerCase());
+      const sessHealth = classifySessionHealth({
+        hasSessionId: Boolean(sid),
+        sessionStatus: live.status,
+        phoneConnected,
+      });
       licenseSessions.push({
         licenseId: lic.id,
         label: lic.label || lic.key.slice(0, 16),
@@ -33,10 +41,13 @@ export async function GET() {
         status: live.status,
         phone: live.phone || "",
         ok: live.ok,
+        health: sessHealth,
+        needsReconnect: sessHealth === "needs_reconnect",
       });
     }
 
-    const readyCount = licenseSessions.filter((s) => s.status === "ready").length;
+    const readyCount = licenseSessions.filter((s) => s.health === "ready").length;
+    const dropCount = licenseSessions.filter((s) => s.needsReconnect).length;
 
     return NextResponse.json({
       baseUrl: cfg.baseUrl,
@@ -50,10 +61,13 @@ export async function GET() {
       summary: {
         linkedLicenses: licenseSessions.length,
         ready: readyCount,
+        needsReconnect: dropCount,
         note:
-          readyCount > 0
-            ? `${readyCount} license phone(s) ready — sessions are per site`
-            : "No ready license sessions yet. Connect phone from WordPress Settings → WhatsApp (QR).",
+          dropCount > 0
+            ? `${dropCount} license phone link(s) need reconnect — ask the site admin to scan QR again in Settings → WhatsApp.`
+            : readyCount > 0
+              ? `${readyCount} license phone(s) ready — sessions are per site`
+              : "No ready license sessions yet. Connect phone from WordPress Settings → WhatsApp (QR).",
       },
     });
   } catch (e) {

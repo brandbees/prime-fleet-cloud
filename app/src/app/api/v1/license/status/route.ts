@@ -3,9 +3,12 @@ import { prisma } from "@/lib/prisma";
 import {
   canUsePlugin,
   canUseWhatsApp,
+  classifySessionHealth,
   daysLeft,
   normalizeWaEntitlement,
+  RECONNECT_STEPS,
   serverStatusOf,
+  sessionHealthMessage,
   waExpiry,
 } from "@/lib/license-status";
 import { sessionById } from "@/lib/openwa";
@@ -19,7 +22,7 @@ import {
 
 /** Plugin polls this — no key shown to the user. */
 export async function POST(req: Request) {
-  const limited = rateLimited(`license:status:${clientIp(req)}`, 90, 60_000);
+  const limited = await rateLimited(`license:status:${clientIp(req)}`, 90, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as { license_key?: string; site_url?: string };
@@ -55,40 +58,42 @@ export async function POST(req: Request) {
   let phoneConnected = false;
   let phone = "";
   let sessionStatus = "";
-  if (license.openwaSessionId) {
+  const hasSessionId = Boolean(license.openwaSessionId);
+  if (hasSessionId) {
     try {
-      const sess = await sessionById(license.openwaSessionId);
+      const sess = await sessionById(license.openwaSessionId!);
       sessionStatus = sess.status;
-      phoneConnected = sess.ok && sess.status === "ready";
+      phoneConnected = sess.ok && ["ready", "connected", "open"].includes(String(sess.status || "").toLowerCase());
       phone = phoneConnected ? String(sess.phone || "") : "";
     } catch {
       sessionStatus = "unknown";
     }
   }
 
+  const sessionHealth = classifySessionHealth({
+    hasSessionId,
+    sessionStatus,
+    phoneConnected,
+  });
+  const healthMsg = sessionHealthMessage(sessionHealth, phone);
+
   let waMessage = !plugin.ok
     ? "License inactive or revoked."
     : wa.ok
-      ? phoneConnected
-        ? phone
-          ? `Phone connected (${phone}).`
-          : "Phone already connected."
-        : ent === "trial"
-          ? `Trial active${daysLeft(exp) != null ? ` · ${daysLeft(exp)} days left` : ""}. Connect your phone to send.`
-          : "WhatsApp plan active. Connect your phone to send."
+      ? healthMsg || "WhatsApp plan active. Connect your phone to send."
       : wa.reason === "no_wa"
-        ? "No WhatsApp plan on this license. Update your plan to enable hosted WhatsApp."
-        : wa.reason === "trial_expired"
-          ? "Trial ended. Update your plan to keep sending messages."
-          : "WhatsApp plan inactive or expired. Update your plan to continue.";
+        ? "No WhatsApp plan on this license. Choose Monthly or Yearly to enable hosted WhatsApp."
+        : "WhatsApp plan inactive or expired. Update your plan to continue.";
 
   if (wa.ok && serverStatus === "provisioning") {
-    waMessage = "Setting up your WhatsApp server… This usually takes a minute.";
+    waMessage = "Preparing Hosted WhatsApp… This usually takes a minute.";
   } else if (wa.ok && serverStatus === "error") {
-    waMessage = "WhatsApp server setup failed. Retry from the panel or contact support.";
+    waMessage = "Hosted WhatsApp setup failed. Retry from the panel or contact support.";
   } else if (wa.ok && serverStatus === "stopped") {
-    waMessage = "WhatsApp server is powered off. Update your plan or ask support to restart.";
+    waMessage = "Hosted WhatsApp is paused. Update your plan or ask support to restart.";
   }
+
+  const needsReconnect = wa.ok && sessionHealth === "needs_reconnect";
 
   return NextResponse.json({
     ok: wa.ok,
@@ -102,6 +107,9 @@ export async function POST(req: Request) {
     phone_connected: phoneConnected,
     phone,
     session_status: sessionStatus,
+    session_health: sessionHealth,
+    needs_reconnect: needsReconnect,
+    reconnect_hint: needsReconnect ? RECONNECT_STEPS : "",
     server_status: serverStatus,
     server_ip: serverIp,
     message: waMessage,

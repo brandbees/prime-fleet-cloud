@@ -10,17 +10,18 @@ import {
 } from "@/lib/security";
 
 /**
- * Plugin asks for a pay URL when trial/license is expired.
- * Body: { license_key, return_url?, site_url? }
+ * Plugin asks for a pay URL when Hosted WA is unpaid or expired.
+ * Body: { license_key, return_url?, site_url?, plan?: "monthly"|"yearly" }
  */
 export async function POST(req: Request) {
-  const limited = rateLimited(`billing:checkout:${clientIp(req)}`, 20, 60_000);
+  const limited = await rateLimited(`billing:checkout:${clientIp(req)}`, 20, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as {
     license_key?: string;
     return_url?: string;
     site_url?: string;
+    plan?: string;
   };
   const key = String(body.license_key || req.headers.get("x-prime-fleet-license") || "").trim();
   if (!key) return NextResponse.json({ error: "Missing license_key" }, { status: 400 });
@@ -39,7 +40,7 @@ export async function POST(req: Request) {
   if (gate.ok && (ent === "paid" || ent === "monthly" || ent === "yearly")) {
     return NextResponse.json({
       already_paid: true,
-      plan: "paid",
+      plan: ent,
       message: "Already active.",
     });
   }
@@ -47,13 +48,13 @@ export async function POST(req: Request) {
   try {
     const checkout = await createCheckoutForLicense(
       key,
-      String(body.return_url || "").trim()
+      String(body.return_url || "").trim(),
+      String(body.plan || "monthly")
     );
     return NextResponse.json({
       already_paid: false,
       needs_payment: !gate.ok,
       reason: gate.ok ? "upgrade" : gate.reason,
-      plan: license.plan,
       ...checkout,
     });
   } catch (e) {

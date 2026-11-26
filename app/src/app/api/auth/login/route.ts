@@ -6,8 +6,8 @@ import { clientIp, rateLimited } from "@/lib/security";
 export async function POST(req: Request) {
   const ip = clientIp(req);
   const limited =
-    rateLimited(`auth:login:ip:${ip}`, 10, 60_000) ||
-    rateLimited(`auth:login:global`, 60, 60_000);
+    await rateLimited(`auth:login:ip:${ip}`, 10, 60_000) ||
+    await rateLimited(`auth:login:global`, 60, 60_000);
   if (limited) return limited;
 
   const body = (await req.json().catch(() => ({}))) as { email?: string; password?: string };
@@ -19,7 +19,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Email and password required" }, { status: 400 });
   }
 
-  const emailLimit = rateLimited(`auth:login:email:${email}`, 8, 15 * 60_000);
+  const emailLimit = await rateLimited(`auth:login:email:${email}`, 8, 15 * 60_000);
   if (emailLimit) return emailLimit;
 
   const user = await prisma.adminUser.findUnique({ where: { email } });
