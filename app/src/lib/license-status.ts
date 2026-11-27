@@ -38,7 +38,7 @@ export function normalizeWaEntitlement(license: LicenseLike): WaEntitlement {
 export function waExpiry(license: LicenseLike): Date | string | null {
   if (license.waExpiresAt != null) return license.waExpiresAt;
   // Legacy: expiresAt was WA trial expiry.
-  if (normalizeWaEntitlement(license) !== "none") return license.expiresAt;
+  if (normalizeWaEntitlement(license) !== "none") return license.expiresAt ?? null;
   return null;
 }
 
