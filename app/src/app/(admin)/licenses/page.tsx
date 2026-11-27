@@ -40,7 +40,7 @@ function pluginBadge(r: License) {
 
 function waBadge(r: License) {
   const ent = (r.waEntitlement || r.plan || "none").toLowerCase();
-  if (ent === "none" || ent === "trial") return <span className="badge off">WA none</span>;
+  if (ent === "none") return <span className="badge off">WA none</span>;
   if (r.gateReason === "expired") {
     return <span className="badge off">WA expired</span>;
   }
@@ -284,10 +284,7 @@ export default function LicensesPage() {
                     </td>
                     <td>
                       <div className="actions">
-                        {(r.waEntitlement === "none" ||
-                          r.plan === "none" ||
-                          r.plan === "trial" ||
-                          r.waEntitlement === "trial") && (
+                        {String(r.waEntitlement || "none").toLowerCase() === "none" && (
                           <button
                             type="button"
                             className="btn btn-primary"
@@ -297,7 +294,7 @@ export default function LicensesPage() {
                           </button>
                         )}
                         {["paid", "monthly", "yearly"].includes(
-                          String(r.waEntitlement || r.plan || "").toLowerCase()
+                          String(r.waEntitlement || "").toLowerCase()
                         ) && (
                           <button
                             type="button"

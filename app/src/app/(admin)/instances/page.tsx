@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Loader, PanelLoader } from "@/components/Loader";
 
 type InstanceRow = {
@@ -80,12 +80,33 @@ function friendlyActionError(raw: string) {
   return msg;
 }
 
+function summarize(rows: InstanceRow[]) {
+  let ready = 0;
+  let provisioning = 0;
+  let poweredOff = 0;
+  let errors = 0;
+  for (const r of rows) {
+    const s = String(r.status || "").toLowerCase();
+    if (s === "running") ready++;
+    else if (s === "provisioning") provisioning++;
+    else if (s === "stopped") poweredOff++;
+    else if (s === "error") errors++;
+  }
+  return { total: rows.length, ready, provisioning, poweredOff, errors };
+}
+
 export default function InstancesPage() {
   const [rows, setRows] = useState<InstanceRow[]>([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState("");
   const [flash, setFlash] = useState("");
+
+  const summary = useMemo(() => summarize(rows), [rows]);
+  const failed = useMemo(
+    () => rows.filter((r) => String(r.status || "").toLowerCase() === "error"),
+    [rows]
+  );
 
   async function load() {
     setLoading(true);
@@ -152,6 +173,60 @@ export default function InstancesPage() {
         </div>
         <div className="page-head__actions">{busyId || loading ? <Loader /> : null}</div>
       </div>
+
+      {!loading && rows.length > 0 ? (
+        <div className="card" style={{ display: "flex", flexWrap: "wrap", gap: 12, alignItems: "center" }}>
+          <strong style={{ marginRight: 4 }}>Summary</strong>
+          <span className="badge ok">Ready {summary.ready}</span>
+          <span className="badge warn">Provisioning {summary.provisioning}</span>
+          <span className="badge off">Powered off {summary.poweredOff}</span>
+          <span className={summary.errors ? "badge off" : "badge"} style={summary.errors ? undefined : { opacity: 0.7 }}>
+            Errors {summary.errors}
+          </span>
+          <span className="muted" style={{ marginLeft: "auto", fontSize: 13 }}>
+            {summary.total} total
+          </span>
+        </div>
+      ) : null}
+
+      {failed.length > 0 ? (
+        <div
+          className="card"
+          role="alert"
+          style={{
+            borderColor: "var(--danger)",
+            background: "rgba(155, 44, 44, 0.06)",
+          }}
+        >
+          <strong style={{ color: "var(--danger)" }}>
+            {failed.length} provision failure{failed.length === 1 ? "" : "s"}
+          </strong>
+          <p className="muted" style={{ margin: "6px 0 10px" }}>
+            Hosted WhatsApp setup failed for these licenses. Open the Error column, then Retry provision.
+          </p>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {failed.map((r) => (
+              <li key={r.id} style={{ marginBottom: 6 }}>
+                <strong>{r.license.label || r.licenseId}</strong>
+                {r.lastError ? (
+                  <span className="muted"> — {r.lastError}</span>
+                ) : (
+                  <span className="muted"> — Provision failed</span>
+                )}{" "}
+                <button
+                  type="button"
+                  className="btn"
+                  style={{ marginLeft: 6 }}
+                  disabled={busyId === r.licenseId}
+                  onClick={() => act(r.licenseId, "retry")}
+                >
+                  Retry
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
 
       {error ? <p style={{ color: "var(--danger)" }}>{error}</p> : null}
       {flash ? <p style={{ color: "var(--ok, #047857)" }}>{flash}</p> : null}
